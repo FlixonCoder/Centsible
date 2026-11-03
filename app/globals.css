@@ -3,42 +3,129 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --background: #F7F8FC;
-    --foreground: #0F172A;
+  html {
+    -webkit-text-size-adjust: 100%;
   }
-
   body {
-    background-color: var(--background);
-    color: var(--foreground);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    color: #0f172a;
+    background: #f6f7fc;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv11", "ss01";
+  }
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  :focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
+    border-radius: 8px;
   }
 }
 
-/* Custom subtle scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* ---------- App background ---------- */
+.app-bg {
+  background:
+    radial-gradient(900px 420px at 85% -8%, rgba(124, 58, 237, 0.09), transparent 62%),
+    radial-gradient(800px 420px at 5% 0%, rgba(79, 70, 229, 0.07), transparent 60%),
+    #f6f7fc;
 }
 
+.left-panel-bg {
+  background:
+    radial-gradient(420px 260px at 100% 0%, rgba(99, 102, 241, 0.28), transparent 70%),
+    radial-gradient(360px 260px at 0% 100%, rgba(34, 211, 238, 0.12), transparent 70%),
+    linear-gradient(180deg, #1e1b4b 0%, #17143d 55%, #0e0c2b 100%);
+}
+
+/* ---------- Skeleton shimmer ---------- */
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  background: #e9ecf6;
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.75), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+/* ---------- Slider ---------- */
+.cs-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  outline: none;
+  background: linear-gradient(to right, var(--c, #4f46e5) var(--pct, 0%), #e1e5f2 var(--pct, 0%));
+}
+.cs-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #fff;
+  border: 5px solid var(--c, #4f46e5);
+  box-shadow: 0 4px 12px rgba(30, 27, 75, 0.28);
+  transition: transform 0.15s ease;
+}
+.cs-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+.cs-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  border: 5px solid var(--c, #4f46e5);
+  box-shadow: 0 4px 12px rgba(30, 27, 75, 0.28);
+}
+
+/* ---------- Scrollbars ---------- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
-  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+}
+.dark-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.6);
+/* ---------- Calm Mode: softer colours, no pulsing ---------- */
+.calm {
+  filter: saturate(0.8);
+}
+.calm .animate-pulse,
+.calm .animate-spin,
+.calm .shimmer::after {
+  animation: none !important;
 }
 
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-

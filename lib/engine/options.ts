@@ -73,7 +73,7 @@ export function compareBorrowOptions(
   const bnplTenure = 3;
   const bnplMonthly = Math.round(creditNeeded / bnplTenure);
   const bnplFee = 600; // Flat platform / convenience fee
-  const bnplTotal = bnplMonthly * bnplTenure + bnplFee;
+  const bnplTotal = creditNeeded + bnplFee; // 3 equal instalments + flat fee
   const bnplIsSafe = bnplMonthly <= safeMonthlyLimit;
   const bnplOption: BorrowOption = {
     id: "bnpl_3m",
@@ -107,7 +107,7 @@ export function compareBorrowOptions(
   // 15% p.a., ₹999 fee + 18% GST (= 1,178.82)
   const cardEmiRate = 15;
   const cardEmiRaw = calculateEMI(creditNeeded, cardEmiRate, 12);
-  const cardEmiMonthly = Math.round(cardEmiRaw);
+  const cardEmiMonthly = Math.round(cardEmiRaw / 10) * 10; // lenders quote EMIs rounded to ₹10
   const cardFeeBase = 999;
   const cardFeeGst = Math.round(cardFeeBase * 1.18);
   const cardEmiTotal = cardEmiMonthly * 12 + cardFeeGst;
@@ -144,7 +144,7 @@ export function compareBorrowOptions(
   // 16% p.a., 1.5% processing fee + 18% GST (on 40,000 = 600 + 108 = 708)
   const plRate = 16;
   const plRaw = calculateEMI(creditNeeded, plRate, 12);
-  const plMonthly = Math.round(plRaw);
+  const plMonthly = Math.round(plRaw / 10) * 10; // lenders quote EMIs rounded to ₹10
   const plFeeBase = Math.round(creditNeeded * 0.015);
   const plFeeGst = Math.round(plFeeBase * 1.18);
   const plTotal = plMonthly * 12 + plFeeGst;

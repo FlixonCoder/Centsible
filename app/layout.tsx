@@ -2,19 +2,15 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Centsible — Financial Emergency Decision Assistant (IDEATHON 2026)",
+  title: "Centsible — Borrow with clarity, not panic",
   description:
-    "Interactive demo showing how Centsible guides users through sudden financial emergencies with mathematical clarity.",
+    "Interactive demo of Centsible, the financial emergency decision assistant (IDEATHON 2026 · Fintech).",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="antialiased selection:bg-indigo-100 selection:text-indigo-900 overflow-hidden font-sans bg-background text-slate-900">
+      <body className="font-sans antialiased selection:bg-indigo-100 selection:text-indigo-900">
         {children}
       </body>
     </html>

@@ -48,7 +48,7 @@ describe("Centsible Calculation Engine - Priya Baseline Specs", () => {
     expect(cardMin.verdict).toBe("RISKY");
 
     // 2. BNPL 3 months: ≈ 40,600 total (13,333/mo * 3 + 600 fee)
-    expect(bnpl.totalRepaid).toBe(40599); // 13,333 * 3 + 600
+    expect(bnpl.totalRepaid).toBe(40600); // 40,000 principal + 600 fee
     expect(bnpl.monthlyPayment).toBe(13333);
     expect(bnpl.verdict).toBe("RISKY");
 
@@ -59,7 +59,7 @@ describe("Centsible Calculation Engine - Priya Baseline Specs", () => {
     expect(cardEmi.verdict).toBe("SAFE");
 
     // 4. Personal loan 12m: monthly ≈ 3,630, total ≈ 44,300 (recommended)
-    expect(pl.monthlyPayment).toBe(3629); // rounds to 3,630
+    expect(pl.monthlyPayment).toBe(3630);
     expect(pl.totalRepaid).toBeGreaterThanOrEqual(44200);
     expect(pl.totalRepaid).toBeLessThanOrEqual(44400);
     expect(pl.verdict).toBe("SAFE");

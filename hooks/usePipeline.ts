@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { PERSONAS, DEFAULT_PERSONA_ID, Persona } from "@/lib/sample-data";
 import { calculateSafeToBorrow, SafeToBorrowResult } from "@/lib/engine/safeToBorrow";
 import { compareBorrowOptions, OptionsComparisonResult } from "@/lib/engine/options";
@@ -14,9 +14,11 @@ import { decide, DecisionResult } from "@/lib/engine/decide";
 import { formatINR } from "@/lib/format";
 
 export type StepStatus = "idle" | "running" | "done" | "warning";
+export type Timeframe = "today" | "week" | "month";
+export type Category = Persona["emergencyCategory"];
 
 export interface PipelineStepMeta {
-  index: number; // 1 to 7
+  index: number;
   id: string;
   title: string;
   shortTitle: string;
@@ -26,113 +28,171 @@ export interface PipelineStepMeta {
   executionTimeSec: number;
   inputSummary: string;
   outputSummary: string;
-  hasRiskWarning?: boolean;
+  hasRiskWarning: boolean;
 }
 
-const STEP_DEFINITIONS: Array<{
-  index: number;
-  id: string;
-  title: string;
-  shortTitle: string;
-  iconName: string;
-  description: string;
-  defaultTime: number;
-}> = [
-  {
-    index: 1,
-    id: "link-data",
-    title: "Link Verified Data",
-    shortTitle: "Link Data",
-    iconName: "Link2",
-    description: "Account Aggregator ingestion & expense categorization",
-    defaultTime: 0.8,
-  },
-  {
-    index: 2,
-    id: "apply-savings",
-    title: "Apply Available Savings",
-    shortTitle: "Apply Savings",
-    iconName: "PiggyBank",
-    description: "Minimizing net borrowing gap before credit",
-    defaultTime: 0.6,
-  },
-  {
-    index: 3,
-    id: "safe-to-borrow",
-    title: "Safe-to-Borrow Engine",
-    shortTitle: "Safe-to-Borrow",
-    iconName: "ShieldAlert",
-    description: "True monthly repayment capacity calculation",
-    defaultTime: 0.9,
-  },
-  {
-    index: 4,
-    id: "compare-costs",
-    title: "Compare True Borrowing Costs",
-    shortTitle: "Compare Costs",
-    iconName: "Scale",
-    description: "Amortizing options and exposing hidden traps",
-    defaultTime: 0.7,
-  },
-  {
-    index: 5,
-    id: "stress-test",
-    title: "Cash Flow Stress Test",
-    shortTitle: "Stress Test",
-    iconName: "Activity",
-    description: "Simulating income shocks before commitment",
-    defaultTime: 1.1,
-  },
-  {
-    index: 6,
-    id: "mitigation-layer",
-    title: "Mitigation Layer",
-    shortTitle: "Mitigation",
-    iconName: "Sparkles",
-    description: "Pinpointing gentle expense cuts to safeguard cash flow",
-    defaultTime: 0.9,
-  },
-  {
-    index: 7,
-    id: "decision-matrix",
-    title: "Optimal Decision",
-    shortTitle: "Decision",
-    iconName: "CheckCircle2",
-    description: "Grounded recommendation and non-predatory roadmap",
-    defaultTime: 0.5,
-  },
-];
+export const STEP_DEFINITIONS = [
+  { index: 1, id: "link-data", title: "Link Data", shortTitle: "Link Data", iconName: "Link2", description: "Read-only account sync", defaultTime: 0.8 },
+  { index: 2, id: "apply-savings", title: "Apply Savings", shortTitle: "Apply Savings", iconName: "PiggyBank", description: "Shrink the borrowing gap", defaultTime: 0.6 },
+  { index: 3, id: "safe-to-borrow", title: "Safe-to-Borrow", shortTitle: "Safe-to-Borrow", iconName: "ShieldAlert", description: "True monthly capacity", defaultTime: 0.9 },
+  { index: 4, id: "compare-costs", title: "Compare True Costs", shortTitle: "Compare True Costs", iconName: "Scale", description: "Amortise every option", defaultTime: 0.7 },
+  { index: 5, id: "stress-test", title: "Stress Test", shortTitle: "Stress Test", iconName: "Activity", description: "Simulate an income drop", defaultTime: 1.1 },
+  { index: 6, id: "mitigation", title: "Mitigation Layer", shortTitle: "Mitigation Layer", iconName: "Sparkles", description: "Find cash to free up", defaultTime: 0.9 },
+  { index: 7, id: "decision", title: "Decision", shortTitle: "Decision", iconName: "CheckCircle2", description: "Grounded recommendation", defaultTime: 0.5 },
+] as const;
+
+const URGENCY_FOR: Record<Timeframe, Persona["emergencyUrgency"]> = {
+  today: "high",
+  week: "high",
+  month: "medium",
+};
+
+const CATEGORY_TITLE: Record<Category, string> = {
+  medical: "Medical bill",
+  repair: "Repair bill",
+  education: "Education fee",
+  family: "Family expense",
+  other: "Emergency expense",
+};
+
+const DUE_LABEL: Record<Timeframe, string> = {
+  today: "Due today",
+  week: "Due this week",
+  month: "Due this month",
+};
+
+const defaultTimeframe = (p: Persona): Timeframe => (p.emergencyUrgency === "high" ? "week" : "month");
+
+const ALL_MITIGATION_IDS = DEFAULT_MITIGATION_ACTIONS.map((a) => a.id);
 
 export function usePipeline() {
-  const [personaId, setPersonaId] = useState<string>(DEFAULT_PERSONA_ID);
-  const persona = PERSONAS[personaId] || PERSONAS[DEFAULT_PERSONA_ID];
+  const [personaId, setPersonaIdState] = useState<string>(DEFAULT_PERSONA_ID);
+  const basePersona = PERSONAS[personaId] || PERSONAS[DEFAULT_PERSONA_ID];
 
-  const [currentStep, setCurrentStep] = useState<number>(1);
-  const [isPlayingDemo, setIsPlayingDemo] = useState<boolean>(false);
-  const [calmMode, setCalmMode] = useState<boolean>(false);
-  const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
+  // Step-1 answers (they genuinely feed the engine)
+  const [category, setCategory] = useState<Category>(basePersona.emergencyCategory);
+  const [timeframe, setTimeframe] = useState<Timeframe>(defaultTimeframe(basePersona));
+  const [emergencyAmount, setEmergencyAmount] = useState<number>(basePersona.emergencyAmount);
 
-  // User interactive state inputs
-  const [savingsApplied, setSavingsApplied] = useState<number>(persona.savingsDefaultApplied);
+  const persona = useMemo<Persona>(() => {
+    const sameCategory = category === basePersona.emergencyCategory;
+    const sameTimeframe = timeframe === defaultTimeframe(basePersona);
+    return {
+      ...basePersona,
+      emergencyCategory: category,
+      emergencyUrgency: URGENCY_FOR[timeframe],
+      emergencyAmount,
+      emergencyTitle: sameCategory ? basePersona.emergencyTitle : CATEGORY_TITLE[category],
+      emergencyDue: sameTimeframe ? basePersona.emergencyDue : DUE_LABEL[timeframe],
+    };
+  }, [basePersona, category, timeframe, emergencyAmount]);
+
+  // Navigation / processing state machine
+  const [currentStep, setCurrentStep] = useState(1);
+  const [maxReached, setMaxReached] = useState(1);
+  const [processingStep, setProcessingStep] = useState<number | null>(1);
+  const [isPlayingDemo, setIsPlayingDemo] = useState(false);
+  const [calmMode, setCalmMode] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
+  const stepRef = useRef(1);
+  const maxRef = useRef(1);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Interactive parameters
+  const [savingsApplied, setSavingsApplied] = useState<number>(basePersona.savingsDefaultApplied);
   const [selectedOptionId, setSelectedOptionId] = useState<string>("personal_loan_12m");
   const [incomeDropPercent, setIncomeDropPercent] = useState<number>(20);
-  const [activeMitigationIds, setActiveMitigationIds] = useState<string[]>(
-    DEFAULT_MITIGATION_ACTIONS.map((a) => a.id)
+  const [activeMitigationIds, setActiveMitigationIds] = useState<string[]>(ALL_MITIGATION_IDS);
+
+  /** Enter a step: node goes `running` for 600–900ms (skeleton in main stage), then resolves. */
+  const runStep = useCallback((target: number) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    stepRef.current = target;
+    maxRef.current = Math.max(maxRef.current, target);
+    setCurrentStep(target);
+    setMaxReached(maxRef.current);
+    setProcessingStep(target);
+    timerRef.current = setTimeout(() => setProcessingStep(null), 600 + ((target * 53) % 300));
+  }, []);
+
+  const goToStep = useCallback(
+    (target: number) => {
+      if (target < 1 || target > 7) return;
+      if (target === stepRef.current) return;
+      if (target > maxRef.current + 1) return; // can only move one step beyond what's been computed
+      runStep(target);
+    },
+    [runStep]
   );
 
-  // Step statuses and mini-summaries
-  const [stepStates, setStepStates] = useState<PipelineStepMeta[]>(() =>
-    STEP_DEFINITIONS.map((def) => ({
-      ...def,
-      status: def.index === 1 ? "done" : "idle",
-      executionTimeSec: def.defaultTime,
-      inputSummary: "",
-      outputSummary: "",
-    }))
+  // Kick off step 1 on mount
+  useEffect(() => {
+    runStep(1);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [runStep]);
+
+  const resetAll = useCallback(
+    (p: Persona) => {
+      setCategory(p.emergencyCategory);
+      setTimeframe(defaultTimeframe(p));
+      setEmergencyAmount(p.emergencyAmount);
+      setSavingsApplied(p.savingsDefaultApplied);
+      setIncomeDropPercent(20);
+      setActiveMitigationIds(ALL_MITIGATION_IDS);
+      setIsPlayingDemo(false);
+      maxRef.current = 1;
+      stepRef.current = 0; // force re-run of step 1
+      runStep(1);
+    },
+    [runStep]
   );
 
-  // Computed engine values
-  const creditNeeded = Math.max(0, persona.emergencyAmount - savingsApplied);
+  const setPersonaId = useCallback(
+    (id: string) => {
+      const p = PERSONAS[id] || PERSONAS[DEFAULT_PERSONA_ID];
+      setPersonaIdState(id);
+      resetAll(p);
+    },
+    [resetAll]
+  );
+
+  const resetPipeline = useCallback(() => resetAll(basePersona), [resetAll, basePersona]);
+
+  /** Restore the persona's sample answers (used by "Use sample data"). */
+  const useSampleAnswers = useCallback(() => {
+    setCategory(basePersona.emergencyCategory);
+    setTimeframe(defaultTimeframe(basePersona));
+    setEmergencyAmount(basePersona.emergencyAmount);
+  }, [basePersona]);
+
+  const togglePlayDemo = useCallback(() => {
+    if (isPlayingDemo) {
+      setIsPlayingDemo(false);
+      return;
+    }
+    if (stepRef.current >= 7) resetAll(basePersona);
+    setIsPlayingDemo(true);
+  }, [isPlayingDemo, resetAll, basePersona]);
+
+  // Autoplay: ~4s per step
+  useEffect(() => {
+    if (!isPlayingDemo) return;
+    const id = setInterval(() => {
+      if (stepRef.current >= 7) {
+        setIsPlayingDemo(false);
+        return;
+      }
+      runStep(stepRef.current + 1);
+    }, 4200);
+    return () => clearInterval(id);
+  }, [isPlayingDemo, runStep]);
+
+  // ---- Engine results (pure, deterministic) ----
+  const effectiveSavings = Math.min(savingsApplied, emergencyAmount);
+  const creditNeeded = Math.max(0, persona.emergencyAmount - effectiveSavings);
 
   const safeToBorrowResult: SafeToBorrowResult = calculateSafeToBorrow({
     income: persona.monthlyIncome,
@@ -145,12 +205,11 @@ export function usePipeline() {
     creditNeeded,
     safeToBorrowResult.safeCapacity,
     persona.emergencyAmount,
-    savingsApplied
+    effectiveSavings
   );
 
   const selectedOption =
-    optionsResult.options.find((o) => o.id === selectedOptionId) ||
-    optionsResult.recommendedOption;
+    optionsResult.options.find((o) => o.id === selectedOptionId) || optionsResult.recommendedOption;
 
   const stressTestResult: StressTestResult = calculateStressTest({
     baseIncome: persona.monthlyIncome,
@@ -181,231 +240,113 @@ export function usePipeline() {
     stressPositionBeforeEmi: stressTestResult.monthlyPositionBeforeEmi,
   });
 
-  // Keep summaries updated dynamically
-  useEffect(() => {
-    setStepStates((prev) =>
-      prev.map((step) => {
-        let input = "";
-        let output = "";
-        let warning = false;
+  // ---- Node view-models (status + real Input → Output values) ----
+  const stressRisk = stressTestResult.status !== "RESILIENT";
 
-        switch (step.index) {
-          case 1:
-            input = `4 accounts (HDFC, ICICI, ZenPay, Bajaj)`;
-            output = `Income ${formatINR(persona.monthlyIncome)}, Dues ${formatINR(persona.committedDues)}`;
-            break;
-          case 2:
-            input = `Bill ${formatINR(persona.emergencyAmount)} − Savings ${formatINR(savingsApplied)}`;
-            output = `Credit gap needed: ${formatINR(creditNeeded)}`;
-            break;
-          case 3:
-            input = `Income ${formatINR(persona.monthlyIncome)} − Dues ${formatINR(persona.committedDues)} − Essentials ${formatINR(persona.essentialsAmount)} − Buffer ${formatINR(persona.safetyBuffer)}`;
-            output = `Safe Limit: ${formatINR(safeToBorrowResult.safeCapacity)}/mo`;
-            break;
-          case 4:
-            input = `Credit ${formatINR(creditNeeded)} vs 4 credit avenues`;
-            output = `Best: ${optionsResult.recommendedOption.title} (${formatINR(optionsResult.recommendedOption.monthlyPayment)}/mo)`;
-            break;
-          case 5:
-            input = `Income drop: -${incomeDropPercent}%`;
-            output = `Cashflow: ${formatINR(stressTestResult.monthlyPositionBeforeEmi)}/mo (Deficit!)`;
-            warning = stressTestResult.status !== "RESILIENT";
-            break;
-          case 6:
-            input = `4 spending adjustments + 2 habits`;
-            output = `+${formatINR(mitigationImpact.totalFreedMonthly)}/mo freed cash`;
-            break;
-          case 7:
-            input = `Safe limit ${formatINR(safeToBorrowResult.safeCapacity)} + Mitigation ${formatINR(mitigationImpact.totalFreedMonthly)}`;
-            output = `Save ~${formatINR(decisionResult.heroSavingsVsWorst)} vs Card Min`;
-            break;
-        }
-
-        return {
-          ...step,
-          inputSummary: input,
-          outputSummary: output,
-          hasRiskWarning: warning,
-        };
-      })
-    );
-  }, [
-    persona,
-    savingsApplied,
-    creditNeeded,
-    safeToBorrowResult.safeCapacity,
-    optionsResult.recommendedOption,
-    incomeDropPercent,
-    stressTestResult.monthlyPositionBeforeEmi,
-    stressTestResult.status,
-    mitigationImpact.totalFreedMonthly,
-    decisionResult.heroSavingsVsWorst,
-  ]);
-
-  // Handle switching persona
-  const handlePersonaChange = (newPersonaId: string) => {
-    const newPersona = PERSONAS[newPersonaId] || PERSONAS.priya;
-    setPersonaId(newPersonaId);
-    setSavingsApplied(newPersona.savingsDefaultApplied);
-    setIncomeDropPercent(20);
-    setActiveMitigationIds(DEFAULT_MITIGATION_ACTIONS.map((a) => a.id));
-    setCurrentStep(1);
-    setIsPlayingDemo(false);
-
-    setStepStates((prev) =>
-      prev.map((s) => ({
-        ...s,
-        status: s.index === 1 ? "done" : "idle",
-      }))
-    );
-  };
-
-  // Navigating steps with quick execution simulation
-  const goToStep = useCallback(
-    (targetStep: number) => {
-      if (targetStep < 1 || targetStep > 7) return;
-
-      // Set current target to running temporarily for 400ms if not done
-      setStepStates((prev) =>
-        prev.map((s) => {
-          if (s.index < targetStep) {
-            return {
-              ...s,
-              status: s.index === 5 && s.hasRiskWarning ? "warning" : "done",
-            };
-          }
-          if (s.index === targetStep) {
-            return { ...s, status: "running" };
-          }
-          return s;
-        })
-      );
-
-      const timer = setTimeout(() => {
-        setStepStates((prev) =>
-          prev.map((s) => {
-            if (s.index <= targetStep) {
-              return {
-                ...s,
-                status: s.index === 5 && s.hasRiskWarning ? "warning" : "done",
-              };
-            }
-            return s;
-          })
-        );
-        setCurrentStep(targetStep);
-      }, 350);
-
-      return () => clearTimeout(timer);
+  const summaries: Record<number, { input: string; output: string }> = {
+    1: {
+      input: `${persona.sources.length} sources · Account Aggregator (simulated)`,
+      output: `Income ${formatINR(persona.monthlyIncome)} · Dues ${formatINR(persona.committedDues)} · Essentials ${formatINR(persona.essentialsAmount)}`,
     },
-    []
-  );
-
-  const resetPipeline = () => {
-    setIsPlayingDemo(false);
-    setCurrentStep(1);
-    const defaultP = PERSONAS[personaId];
-    setSavingsApplied(defaultP.savingsDefaultApplied);
-    setIncomeDropPercent(20);
-    setActiveMitigationIds(DEFAULT_MITIGATION_ACTIONS.map((a) => a.id));
-    setStepStates((prev) =>
-      prev.map((s) => ({
-        ...s,
-        status: s.index === 1 ? "done" : "idle",
-      }))
-    );
+    2: {
+      input: `Bill ${formatINR(persona.emergencyAmount)} − Savings ${formatINR(effectiveSavings)}`,
+      output: `Credit needed ${formatINR(creditNeeded)}`,
+    },
+    3: {
+      input: `Income ${formatINR(persona.monthlyIncome)} − Dues ${formatINR(persona.committedDues)} − Essentials ${formatINR(persona.essentialsAmount)} − Buffer ${formatINR(persona.safetyBuffer)}`,
+      output: `${formatINR(safeToBorrowResult.safeCapacity)}/mo safe EMI`,
+    },
+    4: {
+      input: `${formatINR(creditNeeded)} across 4 options`,
+      output: `${optionsResult.recommendedOption.title} · ${formatINR(optionsResult.recommendedOption.monthlyPayment)}/mo`,
+    },
+    5: {
+      input: `Income −${incomeDropPercent}% · EMI ${formatINR(selectedOption.monthlyPayment)}`,
+      output: `${formatINR(stressTestResult.monthlyPositionBeforeEmi)}/mo before EMI`,
+    },
+    6: {
+      input: `${activeMitigationIds.length} of ${ALL_MITIGATION_IDS.length} ideas switched on`,
+      output: `${formatINR(mitigationImpact.totalFreedMonthly)}/mo freed · limit ${formatINR(mitigationImpact.newSafeCapacity)}`,
+    },
+    7: {
+      input: `Safe limit, stress result, cheapest safe option`,
+      output: `Smarter choice saves ≈ ${formatINR(decisionResult.heroSavingsVsWorst)}`,
+    },
   };
 
-  // Demo autoplay loop
-  const demoTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    if (!isPlayingDemo) {
-      if (demoTimerRef.current) clearInterval(demoTimerRef.current);
-      return;
-    }
-
-    demoTimerRef.current = setInterval(() => {
-      setCurrentStep((prev) => {
-        if (prev >= 7) {
-          setIsPlayingDemo(false);
-          return 7;
-        }
-        const next = prev + 1;
-        setStepStates((sPrev) =>
-          sPrev.map((s) => {
-            if (s.index < next) {
-              return {
-                ...s,
-                status: s.index === 5 && s.hasRiskWarning ? "warning" : "done",
-              };
-            }
-            if (s.index === next) {
-              return {
-                ...s,
-                status: next === 5 ? "warning" : "done",
-              };
-            }
-            return s;
-          })
-        );
-        return next;
-      });
-    }, 4200);
-
-    return () => {
-      if (demoTimerRef.current) clearInterval(demoTimerRef.current);
+  const stepStates: PipelineStepMeta[] = STEP_DEFINITIONS.map((def) => {
+    let status: StepStatus = "idle";
+    if (processingStep === def.index) status = "running";
+    else if (def.index <= maxReached) status = def.index === 5 && stressRisk ? "warning" : "done";
+    return {
+      index: def.index,
+      id: def.id,
+      title: def.title,
+      shortTitle: def.shortTitle,
+      iconName: def.iconName,
+      description: def.description,
+      status,
+      executionTimeSec: def.defaultTime,
+      inputSummary: summaries[def.index].input,
+      outputSummary: summaries[def.index].output,
+      hasRiskWarning: def.index === 5 && stressRisk,
     };
-  }, [isPlayingDemo]);
+  });
 
-  // Keyboard navigation shortcuts (§7)
+  // ---- Keyboard shortcuts: ← → Space C Esc ----
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept when typing in an input or textarea
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
       if (e.key === "ArrowRight") {
         e.preventDefault();
-        goToStep(Math.min(7, currentStep + 1));
+        goToStep(stepRef.current + 1);
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        goToStep(Math.max(1, currentStep - 1));
-      } else if (e.code === "Space") {
+        goToStep(stepRef.current - 1);
+      } else if (e.code === "Space" && tag !== "BUTTON") {
         e.preventDefault();
-        setIsPlayingDemo((prev) => !prev);
-      } else if (e.key.toLowerCase() === "c") {
+        togglePlayDemo();
+      } else if (e.key.toLowerCase() === "c" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        setIsChatOpen((prev) => !prev);
+        setIsChatOpen((v) => !v);
       } else if (e.key === "Escape") {
         setIsChatOpen(false);
       }
     };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentStep, goToStep]);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [goToStep, togglePlayDemo]);
 
   return {
     persona,
+    basePersona,
     personaId,
-    setPersonaId: handlePersonaChange,
+    setPersonaId,
     currentStep,
+    maxReached,
+    processingStep,
     goToStep,
     stepStates,
     isPlayingDemo,
-    setIsPlayingDemo,
+    togglePlayDemo,
     resetPipeline,
     calmMode,
     setCalmMode,
     isChatOpen,
     setIsChatOpen,
-    // Interactive parameters
-    savingsApplied,
+    // step-1 answers
+    category,
+    setCategory,
+    timeframe,
+    setTimeframe,
+    emergencyAmount,
+    setEmergencyAmount,
+    useSampleAnswers,
+    // interactive parameters
+    savingsApplied: effectiveSavings,
     setSavingsApplied,
     selectedOptionId,
     setSelectedOptionId,
@@ -413,15 +354,11 @@ export function usePipeline() {
     incomeDropPercent,
     setIncomeDropPercent,
     activeMitigationIds,
-    setActiveMitigationIds,
-    toggleMitigationAction: (actionId: string) => {
+    toggleMitigationAction: (actionId: string) =>
       setActiveMitigationIds((prev) =>
-        prev.includes(actionId)
-          ? prev.filter((id) => id !== actionId)
-          : [...prev, actionId]
-      );
-    },
-    // Computed outputs
+        prev.includes(actionId) ? prev.filter((id) => id !== actionId) : [...prev, actionId]
+      ),
+    // computed outputs
     creditNeeded,
     safeToBorrowResult,
     optionsResult,
@@ -431,5 +368,4 @@ export function usePipeline() {
   };
 }
 
-export type PipelineContextType = ReturnType<typeof usePipeline>;
-
+export type Pipeline = ReturnType<typeof usePipeline>;

@@ -1,34 +1,14 @@
 "use client";
 
-import { usePipeline } from "@/hooks/usePipeline";
+import { ArrowRight, Lightbulb, ShieldCheck, ShoppingBag, Sparkles, Train, Tv, Utensils, Zap } from "lucide-react";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Pipeline } from "@/hooks/usePipeline";
+import { DEFAULT_MITIGATION_ACTIONS } from "@/lib/engine/mitigation";
 import { formatINR } from "@/lib/format";
-import {
-  DEFAULT_MITIGATION_ACTIONS,
-  MitigationAction,
-} from "@/lib/engine/mitigation";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Sparkles,
-  Utensils,
-  Train,
-  Tv,
-  ShoppingBag,
-  Zap,
-  ShieldCheck,
-  CheckCircle2,
-  TrendingUp,
-  Clock,
-  ArrowUpRight,
-} from "lucide-react";
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
 import { cn } from "@/lib/utils";
+import { Badge, Card, CountUp, Reveal, StepHeader, Switch } from "@/components/ui/primitives";
 
-interface MitigationProps {
-  pipeline: ReturnType<typeof usePipeline>;
-}
-
-const ACTION_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Utensils,
   Train,
   Tv,
@@ -37,290 +17,218 @@ const ACTION_ICONS: Record<string, React.ComponentType<{ className?: string }>> 
   ShieldCheck,
 };
 
-export function Mitigation({ pipeline }: MitigationProps) {
+const KEPT = ["#4F46E5", "#7C3AED", "#6366F1", "#818CF8"];
+
+export function Mitigation({ pipeline }: { pipeline: Pipeline }) {
   const {
     activeMitigationIds,
     toggleMitigationAction,
-    mitigationImpact,
+    mitigationImpact: m,
     safeToBorrowResult,
     stressTestResult,
-    goToStep,
+    selectedOption,
+    incomeDropPercent,
   } = pipeline;
 
-  const {
-    totalFreedMonthly,
-    newSafeCapacity,
-    newStressPositionBeforeEmi,
-    prepaymentMonthly,
-    prepaymentTenureMonths,
-    monthsSaved,
-    interestSaved,
-    categorySpendingBefore,
-  } = mitigationImpact;
+  const baseSafe = safeToBorrowResult.safeCapacity;
+  const baseStress = stressTestResult.monthlyPositionBeforeEmi;
 
-  // Donut chart data for spending categories
-  const pieColors = ["#4F46E5", "#06B6D4", "#8B5CF6", "#F59E0B"];
-  const donutData = categorySpendingBefore.map((c, i) => ({
-    name: c.name,
-    value: c.amount - c.freed,
-    cut: c.freed,
-  }));
+  // Donut: kept spend (indigo) + freed portions (green)
+  const donut: { name: string; value: number; color: string; freed: boolean }[] = [];
+  m.categorySpendingBefore.forEach((c, i) => {
+    donut.push({ name: c.name, value: c.amount - c.freed, color: KEPT[i % KEPT.length], freed: false });
+    if (c.freed > 0) donut.push({ name: `${c.name} · freed`, value: c.freed, color: "#34D399", freed: true });
+  });
+  const totalSpend = m.categorySpendingBefore.reduce((a, c) => a + c.amount, 0);
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header */}
-      <div>
-        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold mb-2">
-          <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-          <span>Step 6 of 7</span>
-          <span>•</span>
-          <span>Mitigation Layer & Cash Flow Recovery</span>
-        </div>
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-          Where can you free up cash to strengthen your finances?
-        </h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Zero shaming. Gentle, realistic micro-adjustments identified from your verified statements that instantly restore cash flow resilience.
-        </p>
-      </div>
+    <div>
+      <StepHeader
+        step={6}
+        kicker="Mitigation Layer"
+        title="Where can you free up some cash?"
+        subtitle="Small, gentle tweaks — nothing drastic. Switch any off to see what changes."
+      />
 
-      {/* Hero Summary Badge Card */}
-      <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-indigo-500/10 border border-emerald-200/80 flex items-center justify-between shadow-subtle">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm">
-            <TrendingUp className="w-5 h-5" />
-          </div>
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-emerald-800">
-              Recoverable Monthly Capacity Found
+      <Reveal>
+        <div className="mb-6 flex items-center justify-between rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-7 py-5 text-white shadow-lift">
+          <div className="flex items-center gap-4">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white/20">
+              <Sparkles className="h-6 w-6" />
             </span>
-            <div className="text-2xl font-black font-mono text-emerald-950">
-              +{formatINR(totalFreedMonthly)} / month
+            <div>
+              <div className="text-[13px] font-semibold uppercase tracking-wider text-emerald-50/90">
+                Good news — we found
+              </div>
+              <div className="text-[30px] font-extrabold leading-tight">
+                <CountUp value={m.totalFreedMonthly} duration={0.5} />
+                <span className="text-[18px] font-bold text-emerald-50/90">/month you can free up</span>
+              </div>
             </div>
           </div>
-        </div>
-
-        <div className="text-right">
-          <span className="text-xs text-slate-500">Active Adjustments</span>
-          <div className="text-sm font-semibold font-mono text-emerald-700">
-            {activeMitigationIds.filter((id) => !id.includes("tip")).length} of 4 applied
+          <div className="text-right text-[13px] text-emerald-50/90">
+            {formatINR(m.totalFreedMonthly * 12)} a year, without touching essentials
           </div>
         </div>
-      </div>
+      </Reveal>
 
-      {/* Main Grid: Suggestion Cards (Left) + Live Before/After Recalculation (Right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* Left Column: Suggestion Cards (7 cols) */}
-        <div className="lg:col-span-7 space-y-3">
-          <h2 className="text-sm font-bold text-slate-900 flex items-center justify-between">
-            <span>Actionable Adjustments & Financial Strategies</span>
-            <span className="text-xs font-normal text-slate-500">Toggle on/off to see live impact</span>
-          </h2>
-
-          {DEFAULT_MITIGATION_ACTIONS.map((action) => {
-            const isEnabled = activeMitigationIds.includes(action.id);
-            const IconComp = ACTION_ICONS[action.iconName] || Sparkles;
-
+      <div className="grid grid-cols-12 gap-6">
+        {/* Suggestions */}
+        <div className="col-span-7 space-y-2.5">
+          {DEFAULT_MITIGATION_ACTIONS.map((a, i) => {
+            const on = activeMitigationIds.includes(a.id);
+            const Icon = ICONS[a.iconName] || Lightbulb;
+            const tip = !a.isActionableCut;
             return (
-              <div
-                key={action.id}
-                onClick={() => toggleMitigationAction(action.id)}
-                className={cn(
-                  "p-3.5 rounded-2xl border transition-all cursor-pointer flex items-start justify-between gap-3 bg-white shadow-subtle hover:border-indigo-300",
-                  isEnabled
-                    ? "border-emerald-300 ring-1 ring-emerald-200/50 bg-emerald-50/10"
-                    : "border-slate-200 opacity-60"
-                )}
-              >
-                <div className="flex items-start gap-3 min-w-0">
-                  <div
+              <Reveal key={a.id} delay={0.05 + i * 0.05}>
+                <div
+                  onClick={() => toggleMitigationAction(a.id)}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-4 rounded-2xl border bg-white px-4 py-3.5 shadow-card transition-all",
+                    on ? "border-emerald-200" : "border-cardborder opacity-60"
+                  )}
+                >
+                  <span
                     className={cn(
-                      "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5",
-                      action.isActionableCut
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-indigo-100 text-indigo-700"
+                      "grid h-11 w-11 shrink-0 place-items-center rounded-xl",
+                      tip ? "bg-indigo-50 text-primary-accent" : "bg-emerald-50 text-emerald-600"
                     )}
                   >
-                    <IconComp className="w-4 h-4" />
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[15px] font-bold leading-snug text-navy-900">{a.title}</div>
+                    <div className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-slate-500">{a.description}</div>
                   </div>
-
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <h3 className="text-xs font-bold text-slate-900">
-                        {action.title}
-                      </h3>
-                      <span className="text-[10px] px-1.5 py-0.2 rounded-full font-semibold bg-slate-100 text-slate-600">
-                        {action.effort}
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    {tip ? (
+                      <Badge tone="indigo">Tip</Badge>
+                    ) : (
+                      <span className="text-[17px] font-extrabold tabular-nums text-safe">
+                        +{formatINR(a.monthlySaving)}
                       </span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">
-                      {action.description}
-                    </p>
-
-                    {action.monthlySaving > 0 && (
-                      <div className="text-[11px] font-mono font-bold text-emerald-700 mt-1">
-                        Saves +{formatINR(action.monthlySaving)}/month
-                      </div>
                     )}
+                    <Badge tone={a.effort === "Easy" ? "neutral" : "caution"}>{a.effort}</Badge>
                   </div>
+                  <Switch checked={on} onChange={() => toggleMitigationAction(a.id)} label={a.title} />
                 </div>
-
-                {/* Toggle switch */}
-                <div className="shrink-0 pt-0.5">
-                  <div
-                    className={cn(
-                      "w-10 h-6 rounded-full transition-colors p-0.5 flex items-center",
-                      isEnabled ? "bg-emerald-600 justify-end" : "bg-slate-300 justify-start"
-                    )}
-                  >
-                    <div className="w-5 h-5 rounded-full bg-white shadow-sm" />
-                  </div>
-                </div>
-              </div>
+              </Reveal>
             );
           })}
         </div>
 
-        {/* Right Column: Live Recalculation Before vs After + Donut Chart (5 cols) */}
-        <div className="lg:col-span-5 space-y-4">
-          <h2 className="text-sm font-bold text-slate-900">
-            Live Before vs After Impact
-          </h2>
+        {/* Before vs after + donut */}
+        <div className="col-span-5 space-y-5">
+          <Reveal delay={0.1}>
+            <Card className="p-6">
+              <div className="mb-4 text-[13px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Before vs after · live
+              </div>
 
-          <div className="p-4 rounded-2xl bg-white border border-cardborder shadow-subtle space-y-4">
-            {/* Metric 1: Safe-to-Borrow capacity */}
-            <div>
-              <div className="text-xs text-slate-500 flex items-center justify-between mb-1">
-                <span>Safe-to-Borrow Capacity</span>
-                <span className="font-mono text-[11px] text-emerald-600 font-bold">
-                  +{formatINR(totalFreedMonthly)} boost
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-sm font-mono">
-                <span className="text-slate-400 line-through">
-                  {formatINR(safeToBorrowResult.safeCapacity)}/mo
-                </span>
-                <span className="text-lg font-extrabold text-emerald-600">
-                  {formatINR(newSafeCapacity)}/mo
-                </span>
-              </div>
-            </div>
+              <Metric label="Safe-to-Borrow" before={`${formatINR(baseSafe)}/mo`} after={`${formatINR(m.newSafeCapacity)}/mo`} good />
+              <Metric
+                label={`Stress test (−${incomeDropPercent}% income)`}
+                before={`${formatINR(baseStress)}/mo`}
+                after={`${m.newStressPositionBeforeEmi > 0 ? "+" : ""}${formatINR(m.newStressPositionBeforeEmi)}/mo`}
+                good={m.newStressPositionBeforeEmi >= 0}
+                note="before new EMI"
+              />
+              <Metric
+                label="Months to clear the loan"
+                before={`${selectedOption.tenureMonths} mo`}
+                after={`${m.prepaymentTenureMonths} mo`}
+                good={m.monthsSaved > 0}
+                note={
+                  m.prepaymentMonthly > 0
+                    ? `prepaying ${formatINR(m.prepaymentMonthly)}/mo (50% of freed) · saves ~${formatINR(m.interestSaved)} interest`
+                    : "switch ideas on to prepay faster"
+                }
+                last
+              />
+            </Card>
+          </Reveal>
 
-            {/* Metric 2: Stress Test Position */}
-            <div className="pt-3 border-t border-slate-100">
-              <div className="text-xs text-slate-500 flex items-center justify-between mb-1">
-                <span>Stressed Cash Position (-20% drop)</span>
-                <span
-                  className={cn(
-                    "text-[10px] font-bold px-1.5 py-0.5 rounded",
-                    newStressPositionBeforeEmi >= 0
-                      ? "bg-emerald-100 text-emerald-800"
-                      : "bg-rose-100 text-rose-800"
-                  )}
-                >
-                  {newStressPositionBeforeEmi >= 0 ? "DEFICIT SOLVED ✓" : "DEFICIT PERSISTS"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-sm font-mono">
-                <span className="text-rose-600 line-through">
-                  {formatINR(stressTestResult.monthlyPositionBeforeEmi)}/mo
-                </span>
-                <span
-                  className={cn(
-                    "text-lg font-extrabold",
-                    newStressPositionBeforeEmi >= 0 ? "text-emerald-600" : "text-rose-600"
-                  )}
-                >
-                  {newStressPositionBeforeEmi >= 0 ? "+" : ""}
-                  {formatINR(newStressPositionBeforeEmi)}/mo
-                </span>
-              </div>
-            </div>
-
-            {/* Metric 3: Prepayment Acceleration Impact */}
-            <div className="pt-3 border-t border-slate-100 p-3 rounded-xl bg-indigo-50/70 border border-indigo-100">
-              <div className="text-xs font-bold text-indigo-900 flex items-center gap-1.5 mb-1">
-                <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                Prepay 50% of Freed Cash ({formatINR(prepaymentMonthly)}/mo)
-              </div>
-              <div className="text-xs text-slate-600 space-y-1">
-                <div className="flex justify-between">
-                  <span>Tenure reduces to:</span>
-                  <strong className="font-mono text-indigo-700">
-                    {prepaymentTenureMonths} months ({monthsSaved} mos earlier)
-                  </strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Interest saved:</span>
-                  <strong className="font-mono text-emerald-700">
-                    ~{formatINR(interestSaved)} saved
-                  </strong>
-                </div>
-              </div>
-            </div>
-
-            {/* Donut Chart Visualizing Category Spending */}
-            <div className="pt-2">
-              <div className="text-[11px] font-semibold text-slate-700 mb-1">
-                Spending Adjustments Breakdown
-              </div>
-              <div className="h-32 w-full">
+          <Reveal delay={0.2}>
+            <Card className="flex items-center gap-4 p-5">
+              <div className="relative h-[150px] w-[150px] shrink-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={donutData}
+                      data={donut}
                       dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={30}
-                      outerRadius={48}
-                      paddingAngle={3}
+                      innerRadius={46}
+                      outerRadius={70}
+                      paddingAngle={2}
+                      stroke="none"
+                      startAngle={90}
+                      endAngle={-270}
                     >
-                      {donutData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={pieColors[index % pieColors.length]}
-                        />
+                      {donut.map((d, i) => (
+                        <Cell key={i} fill={d.color} />
                       ))}
                     </Pie>
-                    <Tooltip
-                      formatter={(val: any, name: any, item: any) => [
-                        `${formatINR(Number(val))} (Cut: ${formatINR(item.payload.cut)})`,
-                        name,
-                      ]}
-                    />
+                    <Tooltip formatter={(v: number, n: string) => [formatINR(v), n]} />
                   </PieChart>
                 </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase text-slate-400">Spend</div>
+                    <div className="text-[15px] font-extrabold tabular-nums text-navy-900">
+                      {formatINR(totalSpend - m.totalFreedMonthly)}
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="text-[10px] text-center text-slate-400">
-                Food delivery, cabs, unused apps, impulse spend caps
-              </div>
-            </div>
-          </div>
+              <ul className="flex-1 space-y-1.5 text-[13px]">
+                {m.categorySpendingBefore.map((c, i) => (
+                  <li key={c.name} className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-slate-600">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: KEPT[i % KEPT.length] }} />
+                      {c.name}
+                    </span>
+                    {c.freed > 0 ? (
+                      <span className="font-bold tabular-nums text-safe">−{formatINR(c.freed)}</span>
+                    ) : (
+                      <span className="tabular-nums text-slate-400">{formatINR(c.amount)}</span>
+                    )}
+                  </li>
+                ))}
+                <li className="flex items-center gap-2 pt-1 text-[12px] text-slate-400">
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> Green = freed up
+                </li>
+              </ul>
+            </Card>
+          </Reveal>
         </div>
-      </div>
-
-      {/* Navigation Footer */}
-      <div className="pt-2 flex items-center justify-between">
-        <button
-          onClick={() => goToStep(5)}
-          className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-medium flex items-center gap-1.5 transition-colors"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Back to Stress Test</span>
-        </button>
-
-        <button
-          onClick={() => goToStep(7)}
-          className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs shadow-md shadow-indigo-600/30 flex items-center gap-1.5 transition-all"
-        >
-          <span>View Final Decision & Action Plan</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
       </div>
     </div>
   );
 }
 
+function Metric({
+  label,
+  before,
+  after,
+  good,
+  note,
+  last,
+}: {
+  label: string;
+  before: string;
+  after: string;
+  good: boolean;
+  note?: string;
+  last?: boolean;
+}) {
+  return (
+    <div className={cn("py-3.5", !last && "border-b border-slate-100")}>
+      <div className="text-[13px] font-semibold text-slate-500">{label}</div>
+      <div className="mt-1 flex items-center gap-3">
+        <span className="text-[18px] font-bold tabular-nums text-slate-400 line-through decoration-slate-300">{before}</span>
+        <ArrowRight className="h-4 w-4 text-slate-300" />
+        <span className={cn("text-[26px] font-extrabold tabular-nums", good ? "text-safe" : "text-risk")}>{after}</span>
+      </div>
+      {note && <div className="mt-0.5 text-[12px] text-slate-400">{note}</div>}
+    </div>
+  );
+}

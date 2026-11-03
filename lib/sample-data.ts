@@ -23,6 +23,7 @@ export interface Persona {
   name: string;
   age: number;
   tagline: string;
+  pronoun: "she" | "he";
   role: string;
   monthlyIncome: number;
   incomeType: "salaried" | "gig" | "freelance";
@@ -47,10 +48,11 @@ export const PERSONAS: Record<string, Persona> = {
     name: "Priya Sharma",
     age: 26,
     tagline: "Graphic Designer, salaried",
-    role: "Salaried Professional",
+    pronoun: "she",
+    role: "Salaried",
     monthlyIncome: 45000,
     incomeType: "salaried",
-    emergencyTitle: "Medical bill (Dental surgery)",
+    emergencyTitle: "Medical bill",
     emergencyCategory: "medical",
     emergencyDue: "Due this Friday",
     emergencyUrgency: "high",
@@ -137,7 +139,8 @@ export const PERSONAS: Record<string, Persona> = {
     name: "Arjun Verma",
     age: 29,
     tagline: "UI/UX Freelancer, variable income",
-    role: "Gig Worker / Freelancer",
+    pronoun: "he",
+    role: "Gig worker",
     monthlyIncome: 30000,
     incomeType: "gig",
     incomeVariance: 0.25,
@@ -194,7 +197,8 @@ export const PERSONAS: Record<string, Persona> = {
     name: "Meera Nair",
     age: 32,
     tagline: "Senior QA Engineer, salaried",
-    role: "Salaried Engineer",
+    pronoun: "she",
+    role: "Salaried",
     monthlyIncome: 80000,
     incomeType: "salaried",
     emergencyTitle: "Executive Upskilling Certification Fee",

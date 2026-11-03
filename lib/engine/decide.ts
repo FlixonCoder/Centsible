@@ -56,7 +56,7 @@ export function decide(params: {
 
   // Decision logic
   let primaryVerdict: DecisionVerdictType = "BORROW";
-  let headlineTitle = `Recommended: Borrow ${creditNeeded > 0 ? "₹" + creditNeeded.toLocaleString("en-IN") : ""} via Personal Loan (${recommendedOption.interestRateAnnual}%, 12m)`;
+  let headlineTitle = `Recommended: Borrow ${creditNeeded > 0 ? "₹" + creditNeeded.toLocaleString("en-IN") : ""} via Personal Loan (${recommendedOption.interestRateAnnual}%, ${recommendedOption.tenureMonths} months)`;
 
   if (persona.savingsAvailable >= creditNeeded * 2 && safeLimit < recommendedOption.monthlyPayment) {
     primaryVerdict = "USE_SAVINGS";
@@ -131,6 +131,6 @@ export function decide(params: {
     reasons,
     alternatives,
     actionSteps,
-    disclaimer: "Centsible is strictly an advisory assistant. We do not lend, broker loans, or accept lender commissions.",
+    disclaimer: "Centsible is advisory only. We don't lend and take zero loan commissions.",
   };
 }

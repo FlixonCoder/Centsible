@@ -2,38 +2,29 @@
 
 import { motion } from "framer-motion";
 
-interface DataPacketProps {
-  isRunning: boolean;
-  isWarning?: boolean;
-}
-
-export function DataPacket({ isRunning, isWarning }: DataPacketProps) {
-  if (!isRunning) {
-    return (
-      <div className="w-0.5 h-6 bg-slate-700/60 mx-auto my-0.5 transition-colors" />
-    );
-  }
-
+/** Vertical connector with glowing "data packets" that travel down while a step is running. */
+export function DataPacket({ active, warning }: { active: boolean; warning?: boolean }) {
   return (
-    <div className="relative w-0.5 h-6 bg-indigo-950/80 mx-auto my-0.5 overflow-hidden">
-      {/* Background connector line */}
-      <div className="absolute inset-0 bg-indigo-500/30" />
-
-      {/* Animated glowing packet dot travelling down */}
-      <motion.div
-        className={`absolute w-2 h-2 -left-[3px] rounded-full shadow-lg ${
-          isWarning
-            ? "bg-amber-400 shadow-amber-400/80"
-            : "bg-cyan-300 shadow-cyan-300/90"
+    <div className="relative mx-auto h-5 w-px overflow-visible" aria-hidden>
+      <div
+        className={`absolute inset-0 transition-colors duration-300 ${
+          active ? (warning ? "bg-amber-400/50" : "bg-cyan-300/50") : "bg-white/15"
         }`}
-        animate={{ y: [0, 22] }}
-        transition={{
-          repeat: Infinity,
-          duration: 0.9,
-          ease: "easeInOut",
-        }}
       />
+      {active &&
+        [0, 0.35].map((delay) => (
+          <motion.span
+            key={delay}
+            className={`absolute -left-[3px] h-[7px] w-[7px] rounded-full ${
+              warning
+                ? "bg-amber-300 shadow-[0_0_10px_3px_rgba(251,191,36,0.8)]"
+                : "bg-cyan-300 shadow-[0_0_10px_3px_rgba(103,232,249,0.8)]"
+            }`}
+            initial={{ y: -4, opacity: 0 }}
+            animate={{ y: [-4, 18], opacity: [0, 1, 1, 0] }}
+            transition={{ duration: 0.8, repeat: Infinity, delay, ease: "easeIn" }}
+          />
+        ))}
     </div>
   );
 }
-

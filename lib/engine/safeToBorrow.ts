@@ -34,7 +34,7 @@ export function calculateSafeToBorrow(input: SafeToBorrowInput): SafeToBorrowRes
   
   // Lenders typically approve up to 50% FOIR of income minus current EMI
   // which produces artificially high approvals (e.g. ₹1,50,000)
-  const lenderLimitMock = Math.round(income * 3.33);
+  const lenderLimitMock = Math.round((income * 3.33) / 5000) * 5000;
 
   return {
     income,

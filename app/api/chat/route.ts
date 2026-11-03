@@ -30,15 +30,15 @@ export async function POST(request: NextRequest) {
       context: ChatContext;
     };
 
-    const income = context.monthlyIncome || 45000;
-    const safeLimit = context.safeLimit || 4500;
-    const credit = context.creditNeeded || 40000;
-    const emi = context.recommendedEmi || 3630;
-    const freed = context.mitigationFreedCash || 3400;
-    const bestRepaid = context.bestRepaid || 44259;
-    const worstRepaid = context.worstRepaid || 70000;
-    const savings = context.savingsVsWorst || 25741;
-    const stressBefore = context.stressPositionBeforeEmi || -2500;
+    const income = context.monthlyIncome ?? 45000;
+    const safeLimit = context.safeLimit ?? 4500;
+    const credit = context.creditNeeded ?? 40000;
+    const emi = context.recommendedEmi ?? 3630;
+    const freed = context.mitigationFreedCash ?? 3400;
+    const bestRepaid = context.bestRepaid ?? 44268;
+    const worstRepaid = context.worstRepaid ?? 70000;
+    const savings = context.savingsVsWorst ?? 25732;
+    const stressBefore = context.stressPositionBeforeEmi ?? -2500;
 
     const lower = (message || "").toLowerCase();
 
