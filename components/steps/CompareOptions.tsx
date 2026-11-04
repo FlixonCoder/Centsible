@@ -22,12 +22,12 @@ export function CompareOptions({ pipeline }: { pipeline: Pipeline }) {
   const safeLimit = safeToBorrowResult.safeCapacity;
   const best = optionsResult.recommendedOption;
 
-  const chartData = optionsResult.options.map((o) => ({
+  const chartData = optionsResult.options.map((o: any) => ({
     id: o.id,
     name: SHORT[o.id],
     total: o.totalRepaid,
   }));
-  const maxTotal = Math.max(...chartData.map((d) => d.total));
+  const maxTotal = Math.max(...chartData.map((d: any) => d.total));
 
   return (
     <div>
@@ -39,7 +39,7 @@ export function CompareOptions({ pipeline }: { pipeline: Pipeline }) {
       />
 
       <div className="grid grid-cols-4 gap-5 pt-3">
-        {optionsResult.options.map((o, i) => {
+        {optionsResult.options.map((o: any, i: number) => {
           const selected = o.id === selectedOptionId;
           const safe = o.verdict === "SAFE";
           return (
@@ -144,7 +144,7 @@ export function CompareOptions({ pipeline }: { pipeline: Pipeline }) {
                   tick={{ fontSize: 13, fill: "#475569", fontWeight: 600 }}
                 />
                 <Bar dataKey="total" radius={[0, 8, 8, 0]} isAnimationActive>
-                  {chartData.map((d) => (
+                  {chartData.map((d: any) => (
                     <Cell
                       key={d.id}
                       fill={d.id === best.id ? "#4F46E5" : d.id === "card_min" ? "#F87171" : "#CBD5E1"}
@@ -174,11 +174,11 @@ export function CompareOptions({ pipeline }: { pipeline: Pipeline }) {
                     EMI = P · r · (1 + r)ⁿ ÷ ((1 + r)ⁿ − 1) &nbsp;·&nbsp; r = annual rate ÷ 12
                   </div>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                    {optionsResult.options.map((o) => (
+                    {optionsResult.options.map((o: any) => (
                       <div key={o.id}>
                         <div className="mb-1 text-[13px] font-bold text-navy-900">{o.title}</div>
                         <ul className="space-y-0.5 text-[12.5px] leading-snug text-slate-500">
-                          {o.assumptions.map((a) => (
+                          {o.assumptions.map((a: string) => (
                             <li key={a}>• {a}</li>
                           ))}
                         </ul>

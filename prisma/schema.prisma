@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id              String           @id
+  name            String
+  age             Int
+  city            String?
+  occupation      String?
+  incomeType      String           // "salaried" | "gig" | "freelance"
+  language        String           @default("en")
+  tone            String           @default("calm")
+  incomeBasis     String           @default("average") // "average" | "weak_month"
+  bufferAmount    Float            @default(2000)
+  bufferMode      String           @default("fixed") // "fixed" | "data"
+  foirCap         Float            @default(0.55)
+  calmMode        Boolean          @default(false)
+  livesWithFamily Boolean          @default(false)
+  bureauScore     Int              @default(700)
+  createdAt       DateTime         @default(now())
+
+  accounts        Account[]
+  obligations     Obligation[]
+  categoryRules   CategoryRule[]
+  expenseEvents   ExpenseEvent[]
+  decisions       Decision[]
+  planActions     PlanAction[]
+  consentRecords  ConsentRecord[]
+  chatMessages    ChatMessage[]
+  auditLogs       AuditLog[]
+}
+
+model Account {
+  id                        String        @id
+  userId                    String
+  type                      String        // "savings" | "credit_card" | "bnpl" | "loan"
+  institution               String
+  name                      String
+  mask                      String
+  balance                   Float         @default(0)
+  limit                     Float         @default(0)
+  outstanding               Float         @default(0)
+  apr                       Float         @default(0)
+  statementDay              Int?
+  dueDay                    Int?
+  monthlyPayment            Float         @default(0)
+  earmarkedEmergencySavings Float         @default(0)
+  provider                  String        @default("seed") // "seed" | "manual" | "csv" | "aa"
+  lastSyncedAt              DateTime      @default(now())
+  isActive                  Boolean       @default(true)
+
+  user                      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions              Transaction[]
+  obligations               Obligation[]
+}
+
+model Transaction {
+  id             String   @id @default(cuid())
+  accountId      String
+  date           String   // "YYYY-MM-DD"
+  time           String?
+  amount         Float    // Signed: negative for debit, positive for credit
+  channel        String   // "UPI", "NEFT", "Card", "NACH", "ATM"
+  narration      String
+  merchant       String
+  category       String   // "food", "transport", "subscriptions", "shopping", "personal_misc", "utilities", "rent", "education", "income", "debt_repayment", "savings_transfer", "cash", "one_off"
+  subcategory    String?
+  isRecurring    Boolean  @default(false)
+  isFlexible     Boolean  @default(true)
+  userFlag       String?  // "rarely_used"
+  categorySource String   @default("import") // "rule" | "user" | "import"
+  balanceAfter   Float?
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, date])
+  @@index([category])
+}
+
+model CategoryRule {
+  id          String  @id @default(cuid())
+  userId      String
+  matchType   String  // "exact_merchant" | "contains_narration"
+  pattern     String
+  category    String
+  subcategory String?
+
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Obligation {
+  id              String   @id @default(cuid())
+  userId          String
+  accountId       String?
+  kind            String   // "credit_card_revolving" | "bnpl_order" | "consumer_emi" | "loan"
+  name            String
+  monthlyAmount   Float
+  outstanding     Float    @default(0)
+  apr             Float    @default(0)
+  dueDay          Int?
+  remainingMonths Int?     // null for revolving
+  matchedToBank   Boolean  @default(false)
+  note            String?
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account         Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+}
+
+model ExpenseEvent {
+  id                        String     @id @default(cuid())
+  userId                    String
+  title                     String
+  provider                  String?
+  category                  String     // "medical" | "repair" | "education" | "family" | "other"
+  amount                    Float
+  due                       String     // "YYYY-MM-DD"
+  urgency                   String     @default("high") // "high" | "medium" | "low"
+  canDelay                  Boolean    @default(false)
+  providerOffersInstalments String     @default("unknown")
+  status                    String     @default("active") // "active" | "resolved" | "dismissed"
+  createdAt                 DateTime   @default(now())
+
+  user                      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  decisions                 Decision[]
+}
+
+model Decision {
+  id               String       @id @default(cuid())
+  eventId          String
+  userId           String
+  createdAt        DateTime     @default(now())
+  inputsJson       String       // Snapshot of inputs
+  resultJson       String       // Full result payload
+  traceJson        String       // Decision trace steps
+  selectedOptionId String
+  verdict          String
+  engineVersion    String       @default("2.0.0")
+
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event            ExpenseEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model PlanAction {
+  id             String    @id @default(cuid())
+  userId         String
+  decisionId     String?
+  actionId       String    // "cut_food_delivery", "cut_cab_rides", etc.
+  type           String    // "subscription" | "food" | "transport" | "shopping" | "debt" | "emergency_fund"
+  title          String
+  monthlyImpact  Float
+  status         String    @default("suggested") // "suggested" | "accepted" | "dismissed" | "achieved"
+  evidenceTxnIds String?   // JSON string of transaction IDs
+  acceptedAt     DateTime?
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ConsentRecord {
+  id        String    @id @default(cuid())
+  userId    String
+  sourceId  String
+  purpose   String
+  dataTypes String    // JSON string array of data types
+  fromDate  String
+  toDate    String
+  grantedAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ChatMessage {
+  id            String   @id @default(cuid())
+  userId        String
+  role          String   // "user" | "assistant"
+  content       String
+  toolCallsJson String?
+  sourcesJson   String?
+  createdAt     DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id      String   @id @default(cuid())
+  userId  String
+  action  String
+  entity  String
+  details String?
+  at      DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+

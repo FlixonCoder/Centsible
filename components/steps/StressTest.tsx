@@ -46,7 +46,7 @@ export function StressTest({ pipeline }: { pipeline: Pipeline }) {
     ? `Existing bills are covered at −${incomeDropPercent}%, but the ${formatINR(selectedOption.monthlyPayment)} EMI leaves ${formatINR(s.monthlyPositionWithEmi)} a month.`
     : `At −${incomeDropPercent}% income there's still ${formatINR(s.monthlyPositionWithEmi)} left each month after the EMI.`;
 
-  const data = s.projections.map((p) => ({
+  const data = s.projections.map((p: any) => ({
     name: `M${p.month}`,
     withEmi: p.positionWithEmi,
     beforeEmi: p.positionBeforeEmi,
@@ -184,7 +184,7 @@ export function StressTest({ pipeline }: { pipeline: Pipeline }) {
                   />
                   <ReferenceLine y={0} stroke="#94A3B8" />
                   <Bar dataKey="withEmi" radius={[4, 4, 4, 4]} maxBarSize={34}>
-                    {data.map((d, i) => (
+                    {data.map((d: any, i: number) => (
                       <Cell key={i} fill={d.withEmi >= 0 ? "#16A34A" : "#DC2626"} />
                     ))}
                   </Bar>

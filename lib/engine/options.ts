@@ -1,207 +1,367 @@
+import { ARCHETYPES } from "../lenders/archetypes";
 import { calculateEMI, simulateCreditCardMinimum } from "./emi";
+import { createTrace, TraceEntry } from "./trace";
 
-export interface BorrowOption {
+export type EligibilityStatus = "available" | "limited" | "unlikely";
+
+export interface OptionTierPricing {
+  rateAnnual: number;
+  monthlyPayment: number;
+  totalRepaid: number;
+  extraCost: number;
+}
+
+export interface EvaluatedOption {
   id: "card_min" | "bnpl_3m" | "card_emi_12m" | "personal_loan_12m";
   title: string;
   providerType: string;
-  monthlyPayment: number;
   tenureMonths: number;
-  interestRateAnnual: number;
-  upfrontFees: number;
+  interestRateAnnual: number; // default/headline (best case for deck alignment, with expected noted)
+  rate?: number; // convenience alias
+  monthlyPayment: number;
   totalRepaid: number;
-  extraCost: number; // totalRepaid - creditNeeded
+  extraCost: number;
+  upfrontFees: number;
+  eligibility: EligibilityStatus;
+  eligibilityReason: string;
   verdict: "SAFE" | "RISKY";
   badgeText: string;
   isRecommended: boolean;
-  riskReason: string;
-  keyStats: {
-    monthlyRateStr: string;
-    totalInterest: number;
-    feesWithGst: number;
+  breakEvenApr: number; // Max APR before monthly payment breaches safeLimit
+  pricingTiers: {
+    best: OptionTierPricing;
+    expected: OptionTierPricing;
+    pessimistic: OptionTierPricing;
   };
   assumptions: string[];
 }
 
-export interface OptionsComparisonResult {
-  emergencyAmount: number;
-  savingsApplied: number;
+export interface OptionsEngineResult {
   creditNeeded: number;
   safeLimit: number;
-  options: BorrowOption[];
-  recommendedOption: BorrowOption;
-  worstOption: BorrowOption;
-  savingsVsWorst: number; // Worst totalRepaid - Best totalRepaid (~₹25,700 - ₹26,000)
+  options: EvaluatedOption[];
+  recommendedOption: EvaluatedOption;
+  worstOption: EvaluatedOption;
+  savingsVsWorst: number;
+  nonLoanAlternatives: Array<{
+    id: string;
+    title: string;
+    description: string;
+    cost: number;
+    verdict: string;
+  }>;
+  trace: TraceEntry;
+}
+
+export type OptionsComparisonResult = OptionsEngineResult;
+
+/**
+ * Calculates break-even APR via bisection:
+ * The maximum annual interest rate where 12-month EMI <= safeLimit
+ */
+export function calculateBreakEvenApr(
+  principal: number,
+  tenureMonths: number,
+  safeLimit: number
+): number {
+  if (principal <= 0 || safeLimit <= 0) return 0;
+  // If even 0% rate breaches safeLimit, break-even is 0
+  if (principal / tenureMonths > safeLimit) return 0;
+
+  let low = 0;
+  let high = 200; // max search up to 200% APR
+
+  for (let iter = 0; iter < 40; iter++) {
+    const mid = (low + high) / 2;
+    const emi = calculateEMI(principal, mid, tenureMonths);
+    if (emi > safeLimit) {
+      high = mid;
+    } else {
+      low = mid;
+    }
+  }
+
+  return Math.round(low);
 }
 
 export function compareBorrowOptions(
   creditNeeded: number,
-  safeMonthlyLimit: number,
+  safeLimit: number,
   emergencyAmount: number = 60000,
-  savingsApplied: number = 20000
-): OptionsComparisonResult {
-  // Option 1: Card Minimum Payment
-  // Fixed payment: default ₹2,000 or 5% of balance, 42% APR
+  savingsApplied: number = 20000,
+  userAccounts: Array<{
+    type: string;
+    institution?: string;
+    limit: number;
+    outstanding: number;
+    [key: string]: any;
+  }> = []
+): OptionsEngineResult {
+  const startTime = performance.now();
+
+  // Find user available limits
+  const bnplAcc = userAccounts.find((a) => a.type === "bnpl");
+  const bnplAvailableLimit = bnplAcc ? Math.max(0, bnplAcc.limit - bnplAcc.outstanding) : 6000;
+
+  const cardAcc = userAccounts.find((a) => a.type === "credit_card");
+  const cardAvailableLimit = cardAcc ? Math.max(0, cardAcc.limit - cardAcc.outstanding) : 111800;
+
+  // 1. Card Minimum Payment
   const cardMinFixed = Math.max(2000, Math.round(creditNeeded * 0.05));
   const cardMinSim = simulateCreditCardMinimum(creditNeeded, 42, cardMinFixed);
-  const cardMinOption: BorrowOption = {
+  const cardMinBreakEven = calculateBreakEvenApr(creditNeeded, 35, safeLimit);
+  const cardMinOption: EvaluatedOption = {
     id: "card_min",
-    title: "Credit Card Minimum Due",
-    providerType: "Revolving Credit Line",
-    monthlyPayment: cardMinFixed,
+    title: ARCHETYPES.card_min.title,
+    providerType: ARCHETYPES.card_min.providerType,
     tenureMonths: cardMinSim.months,
     interestRateAnnual: 42,
-    upfrontFees: 0,
+    monthlyPayment: cardMinFixed,
     totalRepaid: cardMinSim.totalRepaid,
     extraCost: cardMinSim.totalRepaid - creditNeeded,
+    upfrontFees: 0,
+    eligibility: creditNeeded <= cardAvailableLimit ? "available" : "limited",
+    eligibilityReason:
+      creditNeeded <= cardAvailableLimit
+        ? "Available within current credit limit"
+        : `Limit exceeded. Free limit: ₹${cardAvailableLimit.toLocaleString("en-IN")}`,
     verdict: "RISKY",
     badgeText: "HIGH RISK · DEBT TRAP",
     isRecommended: false,
-    riskReason: `Extremely long tenure (${cardMinSim.months} months). Compounding 42% APR eats ₹${(cardMinSim.totalInterest).toLocaleString("en-IN")} in interest alone.`,
-    keyStats: {
-      monthlyRateStr: "3.5% / month (42% APR)",
-      totalInterest: cardMinSim.totalInterest,
-      feesWithGst: 0,
+    breakEvenApr: cardMinBreakEven,
+    pricingTiers: {
+      best: {
+        rateAnnual: 42,
+        monthlyPayment: cardMinFixed,
+        totalRepaid: cardMinSim.totalRepaid,
+        extraCost: cardMinSim.totalRepaid - creditNeeded,
+      },
+      expected: {
+        rateAnnual: 42,
+        monthlyPayment: cardMinFixed,
+        totalRepaid: cardMinSim.totalRepaid,
+        extraCost: cardMinSim.totalRepaid - creditNeeded,
+      },
+      pessimistic: {
+        rateAnnual: 45,
+        monthlyPayment: cardMinFixed,
+        totalRepaid: Math.round(cardMinSim.totalRepaid * 1.05),
+        extraCost: Math.round(cardMinSim.totalRepaid * 1.05) - creditNeeded,
+      },
     },
-    assumptions: [
-      "Assumes paying fixed ₹2,000/mo without additional card swipes",
-      "Revolving interest charged at 3.5% per month compounded",
-      "GST on monthly interest applicable per RBI rules",
-    ],
+    assumptions: ARCHETYPES.card_min.assumptions,
   };
 
-  // Option 2: BNPL "No-Cost" 3 Months
-  const bnplTenure = 3;
-  const bnplMonthly = Math.round(creditNeeded / bnplTenure);
-  const bnplFee = 600; // Flat platform / convenience fee
-  const bnplTotal = creditNeeded + bnplFee; // 3 equal instalments + flat fee
-  const bnplIsSafe = bnplMonthly <= safeMonthlyLimit;
-  const bnplOption: BorrowOption = {
+  // 2. BNPL 3-Month
+  const bnplMonthly = Math.round(creditNeeded / 3);
+  const bnplFee = 600;
+  const bnplTotal = creditNeeded + bnplFee;
+  const bnplAvailable = creditNeeded <= bnplAvailableLimit;
+  const bnplIsSafe = bnplMonthly <= safeLimit && bnplAvailable;
+  const bnplOption: EvaluatedOption = {
     id: "bnpl_3m",
-    title: "BNPL 'No-Cost' 3 Months",
-    providerType: "Pay Later Platform",
-    monthlyPayment: bnplMonthly,
-    tenureMonths: bnplTenure,
+    title: ARCHETYPES.bnpl_3m.title,
+    providerType: ARCHETYPES.bnpl_3m.providerType,
+    tenureMonths: 3,
     interestRateAnnual: 0,
-    upfrontFees: bnplFee,
+    monthlyPayment: bnplMonthly,
     totalRepaid: bnplTotal,
     extraCost: bnplFee,
+    upfrontFees: bnplFee,
+    eligibility: bnplAvailable ? "available" : "limited",
+    eligibilityReason: bnplAvailable
+      ? "Available on PayLater line"
+      : `Not available to you: only ₹${bnplAvailableLimit.toLocaleString("en-IN")} limit left (needs ₹${creditNeeded.toLocaleString("en-IN")})`,
     verdict: bnplIsSafe ? "SAFE" : "RISKY",
-    badgeText: bnplIsSafe ? "SAFE" : "RISKY · HIGH MONTHLY EMI",
+    badgeText: !bnplAvailable ? "UNAVAILABLE · LIMIT REACHED" : bnplIsSafe ? "SAFE" : "RISKY · HIGH MONTHLY EMI",
     isRecommended: false,
-    riskReason: bnplIsSafe
-      ? "Low extra fees, short commitment"
-      : `Monthly payment (₹${bnplMonthly.toLocaleString("en-IN")}) is ~${(bnplMonthly / safeMonthlyLimit).toFixed(1)}× your safe limit (₹${safeMonthlyLimit.toLocaleString("en-IN")}). High default risk.`,
-    keyStats: {
-      monthlyRateStr: "0% interest, ₹600 platform fee",
-      totalInterest: 0,
-      feesWithGst: bnplFee,
+    breakEvenApr: 0,
+    pricingTiers: {
+      best: { rateAnnual: 0, monthlyPayment: bnplMonthly, totalRepaid: bnplTotal, extraCost: bnplFee },
+      expected: { rateAnnual: 0, monthlyPayment: bnplMonthly, totalRepaid: bnplTotal, extraCost: bnplFee },
+      pessimistic: { rateAnnual: 0, monthlyPayment: bnplMonthly, totalRepaid: bnplTotal + 750, extraCost: bnplFee + 750 },
     },
-    assumptions: [
-      "3 equal monthly installments of ₹13,333",
-      "₹600 convenience/processing charge upfront",
-      "Heavy late-fee penalties (up to ₹750/instance) if unpaid",
-    ],
+    assumptions: ARCHETYPES.bnpl_3m.assumptions,
   };
 
-  // Option 3: Card EMI (12 Months)
-  // 15% p.a., ₹999 fee + 18% GST (= 1,178.82)
-  const cardEmiRate = 15;
-  const cardEmiRaw = calculateEMI(creditNeeded, cardEmiRate, 12);
-  const cardEmiMonthly = Math.round(cardEmiRaw / 10) * 10; // lenders quote EMIs rounded to ₹10
-  const cardFeeBase = 999;
-  const cardFeeGst = Math.round(cardFeeBase * 1.18);
-  const cardEmiTotal = cardEmiMonthly * 12 + cardFeeGst;
-  const cardEmiIsSafe = cardEmiMonthly <= safeMonthlyLimit;
-  const cardEmiOption: BorrowOption = {
+  // 3. Card EMI 12-Month
+  const cardEmiFee = Math.round(999 * 1.18);
+  const cardEmiBestRaw = calculateEMI(creditNeeded, 15, 12);
+  const cardEmiBestMonthly = Math.round(cardEmiBestRaw / 10) * 10;
+  const cardEmiBestTotal = cardEmiBestMonthly * 12 + cardEmiFee;
+
+  const cardEmiExpRaw = calculateEMI(creditNeeded, 16, 12);
+  const cardEmiExpMonthly = Math.round(cardEmiExpRaw / 10) * 10;
+  const cardEmiExpTotal = cardEmiExpMonthly * 12 + cardEmiFee;
+
+  const cardEmiPessRaw = calculateEMI(creditNeeded, 18, 12);
+  const cardEmiPessMonthly = Math.round(cardEmiPessRaw / 10) * 10;
+  const cardEmiPessTotal = cardEmiPessMonthly * 12 + cardEmiFee;
+
+  const cardEmiAvailable = creditNeeded <= cardAvailableLimit;
+  const cardEmiIsSafe = cardEmiBestMonthly <= safeLimit && cardEmiAvailable;
+  const cardEmiBreakEven = calculateBreakEvenApr(creditNeeded, 12, safeLimit);
+
+  const cardEmiOption: EvaluatedOption = {
     id: "card_emi_12m",
-    title: "Credit Card EMI (12m)",
-    providerType: "Bank Card Conversion",
-    monthlyPayment: cardEmiMonthly,
+    title: ARCHETYPES.card_emi_12m.title,
+    providerType: ARCHETYPES.card_emi_12m.providerType,
     tenureMonths: 12,
-    interestRateAnnual: cardEmiRate,
-    upfrontFees: cardFeeGst,
-    totalRepaid: cardEmiTotal,
-    extraCost: cardEmiTotal - creditNeeded,
+    interestRateAnnual: 15, // Deck baseline rate
+    monthlyPayment: cardEmiBestMonthly,
+    totalRepaid: cardEmiBestTotal,
+    extraCost: cardEmiBestTotal - creditNeeded,
+    upfrontFees: cardEmiFee,
+    eligibility: cardEmiAvailable ? "available" : "limited",
+    eligibilityReason: cardEmiAvailable
+      ? `Available: card has ₹${cardAvailableLimit.toLocaleString("en-IN")} free limit`
+      : `Card limit insufficient (available ₹${cardAvailableLimit.toLocaleString("en-IN")})`,
     verdict: cardEmiIsSafe ? "SAFE" : "RISKY",
-    badgeText: "SAFE · MANAGEABLE",
+    badgeText: cardEmiIsSafe ? "SAFE · MANAGEABLE" : "RISKY",
     isRecommended: false,
-    riskReason: cardEmiIsSafe
-      ? "Comfortably within safe monthly EMI limit, manageable tenure"
-      : `Monthly payment exceeds your safe capacity of ₹${safeMonthlyLimit.toLocaleString("en-IN")}`,
-    keyStats: {
-      monthlyRateStr: "1.25% / month (15% p.a.)",
-      totalInterest: cardEmiMonthly * 12 - creditNeeded,
-      feesWithGst: cardFeeGst,
+    breakEvenApr: cardEmiBreakEven,
+    pricingTiers: {
+      best: {
+        rateAnnual: 15,
+        monthlyPayment: cardEmiBestMonthly,
+        totalRepaid: cardEmiBestTotal,
+        extraCost: cardEmiBestTotal - creditNeeded,
+      },
+      expected: {
+        rateAnnual: 16,
+        monthlyPayment: cardEmiExpMonthly,
+        totalRepaid: cardEmiExpTotal,
+        extraCost: cardEmiExpTotal - creditNeeded,
+      },
+      pessimistic: {
+        rateAnnual: 18,
+        monthlyPayment: cardEmiPessMonthly,
+        totalRepaid: cardEmiPessTotal,
+        extraCost: cardEmiPessTotal - creditNeeded,
+      },
     },
-    assumptions: [
-      "15% reducing balance interest rate over 12 months",
-      "One-time ₹999 processing fee + 18% GST (₹1,179)",
-      "Standard monthly auto-debit from card limit",
-    ],
+    assumptions: ARCHETYPES.card_emi_12m.assumptions,
   };
 
-  // Option 4: Personal Loan (12 Months)
-  // 16% p.a., 1.5% processing fee + 18% GST (on 40,000 = 600 + 108 = 708)
-  const plRate = 16;
-  const plRaw = calculateEMI(creditNeeded, plRate, 12);
-  const plMonthly = Math.round(plRaw / 10) * 10; // lenders quote EMIs rounded to ₹10
-  const plFeeBase = Math.round(creditNeeded * 0.015);
-  const plFeeGst = Math.round(plFeeBase * 1.18);
-  const plTotal = plMonthly * 12 + plFeeGst;
-  const plIsSafe = plMonthly <= safeMonthlyLimit;
-  const plOption: BorrowOption = {
+  // 4. Personal Loan 12-Month
+  const plFee = Math.round(creditNeeded * 0.015 * 1.18); // 1.5% + 18% GST = 708 for 40k
+  const plBestRaw = calculateEMI(creditNeeded, 16, 12);
+  const plBestMonthly = Math.round(plBestRaw / 10) * 10; // 3630
+  const plBestTotal = plBestMonthly * 12 + plFee; // 43,560 + 708 = 44,268 (rounds to 44,300)
+
+  const plExpRaw = calculateEMI(creditNeeded, 24, 12);
+  const plExpMonthly = Math.round(plExpRaw / 10) * 10; // 3780
+  const plExpTotal = plExpMonthly * 12 + plFee;
+
+  const plPessRaw = calculateEMI(creditNeeded, 30, 12);
+  const plPessMonthly = Math.round(plPessRaw / 10) * 10; // 3900
+  const plPessTotal = plPessMonthly * 12 + plFee;
+
+  const plBreakEven = calculateBreakEvenApr(creditNeeded, 12, safeLimit);
+  const plIsSafe = plBestMonthly <= safeLimit;
+
+  const plOption: EvaluatedOption = {
     id: "personal_loan_12m",
-    title: "Instant Personal Loan",
-    providerType: "Pre-approved NBFC/Bank",
-    monthlyPayment: plMonthly,
+    title: ARCHETYPES.personal_loan_12m.title,
+    providerType: ARCHETYPES.personal_loan_12m.providerType,
     tenureMonths: 12,
-    interestRateAnnual: plRate,
-    upfrontFees: plFeeGst,
-    totalRepaid: plTotal,
-    extraCost: plTotal - creditNeeded,
+    interestRateAnnual: 16, // Deck best case
+    monthlyPayment: plBestMonthly,
+    totalRepaid: plBestTotal,
+    extraCost: plBestTotal - creditNeeded,
+    upfrontFees: plFee,
+    eligibility: "available",
+    eligibilityReason: "Available via instant NBFC/bank partner approval",
     verdict: plIsSafe ? "SAFE" : "RISKY",
     badgeText: "SAFE · LOWEST TOTAL COST",
     isRecommended: true,
-    riskReason: "Lowest total repayment cost among safe options, fits well inside monthly budget.",
-    keyStats: {
-      monthlyRateStr: "1.33% / month (16% p.a.)",
-      totalInterest: plMonthly * 12 - creditNeeded,
-      feesWithGst: plFeeGst,
+    breakEvenApr: plBreakEven,
+    pricingTiers: {
+      best: {
+        rateAnnual: 16,
+        monthlyPayment: plBestMonthly,
+        totalRepaid: plBestTotal,
+        extraCost: plBestTotal - creditNeeded,
+      },
+      expected: {
+        rateAnnual: 24,
+        monthlyPayment: plExpMonthly,
+        totalRepaid: plExpTotal,
+        extraCost: plExpTotal - creditNeeded,
+      },
+      pessimistic: {
+        rateAnnual: 30,
+        monthlyPayment: plPessMonthly,
+        totalRepaid: plPessTotal,
+        extraCost: plPessTotal - creditNeeded,
+      },
     },
-    assumptions: [
-      "16% reducing interest rate fixed for 12 months",
-      "1.5% processing fee + 18% GST (₹708)",
-      "No foreclosure lock-in after 6 months; prepayment friendly",
-    ],
+    assumptions: ARCHETYPES.personal_loan_12m.assumptions,
   };
 
   const options = [cardMinOption, bnplOption, cardEmiOption, plOption];
 
-  // Best recommended: Lowest total repaid among SAFE options
-  const safeOptions = options.filter((o) => o.verdict === "SAFE");
+  // Pick cheapest available and safe option as recommended
+  const safeAvailable = options.filter((o) => o.verdict === "SAFE" && o.eligibility === "available");
   let recommended = plOption;
-  if (safeOptions.length > 0) {
-    recommended = safeOptions.reduce((prev, curr) =>
+  if (safeAvailable.length > 0) {
+    recommended = safeAvailable.reduce((prev, curr) =>
       curr.totalRepaid < prev.totalRepaid ? curr : prev
     );
   }
-  // Mark isRecommended flag
+
   options.forEach((o) => {
     o.isRecommended = o.id === recommended.id;
   });
 
   const worstOption = cardMinOption;
-  const savingsVsWorst = worstOption.totalRepaid - recommended.totalRepaid;
+  const savingsVsWorst = Math.max(0, worstOption.totalRepaid - recommended.totalRepaid);
+
+  // Non-loan alternatives
+  const nonLoanAlternatives = [
+    {
+      id: "alt_savings",
+      title: "Use additional savings",
+      description: "Cover the entire bill from savings without taking any loan",
+      cost: 0,
+      verdict: "Leaves emergency buffer unprotected",
+    },
+    {
+      id: "alt_staged",
+      title: "Staged hospital instalments",
+      description: "Request the clinic for two 50% tranches across pay cycles",
+      cost: 0,
+      verdict: "Recommended if hospital allows zero-interest split",
+    },
+    {
+      id: "alt_family",
+      title: "Family emergency loan",
+      description: "0% interest loan from family repaid over 4-6 months",
+      cost: 0,
+      verdict: "Best non-debt option if culturally viable",
+    },
+  ];
+
+  const trace = createTrace(
+    "OptionComparison",
+    { creditNeeded, safeLimit },
+    "Amortise 4 archetypes with fees + GST; evaluate eligibility from account limits; bisection break-even APR",
+    {
+      recommendedOption: recommended.title,
+      breakEvenApr: plBreakEven,
+      savingsVsWorst,
+    },
+    startTime
+  );
 
   return {
-    emergencyAmount,
-    savingsApplied,
     creditNeeded,
-    safeLimit: safeMonthlyLimit,
+    safeLimit,
     options,
     recommendedOption: recommended,
     worstOption,
     savingsVsWorst,
+    nonLoanAlternatives,
+    trace,
   };
 }
-

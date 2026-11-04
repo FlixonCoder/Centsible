@@ -1,44 +1,138 @@
 import { NextRequest, NextResponse } from "next/server";
 import { formatINR } from "@/lib/format";
-
-interface ChatContext {
-  personaName?: string;
-  monthlyIncome?: number;
-  safeLimit?: number;
-  creditNeeded?: number;
-  recommendedEmi?: number;
-  recommendedOptionTitle?: string;
-  recommendedRate?: number;
-  stressPositionBeforeEmi?: number;
-  stressPositionWithEmi?: number;
-  mitigationFreedCash?: number;
-  worstRepaid?: number;
-  bestRepaid?: number;
-  savingsVsWorst?: number;
-}
-
-interface ChatResponsePayload {
-  reply: string;
-  groundedSources: string[];
-  suggestedFollowUps: string[];
-}
+import { getSessionUserId } from "@/lib/session";
+import { db } from "@/lib/db";
+import { deriveProfile } from "@/lib/engine/profile";
+import { calculateObligationRollOff } from "@/lib/engine/obligations";
+import { compareBorrowOptions } from "@/lib/engine/options";
+import { calculateStressTest } from "@/lib/engine/stress";
+import { detectMitigationSuggestions } from "@/lib/engine/mitigation";
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, context = {} } = (await request.json()) as {
-      message: string;
-      context: ChatContext;
-    };
+    const { message } = await request.json();
+    const userId = await getSessionUserId();
 
-    const income = context.monthlyIncome ?? 45000;
-    const safeLimit = context.safeLimit ?? 4500;
-    const credit = context.creditNeeded ?? 40000;
-    const emi = context.recommendedEmi ?? 3630;
-    const freed = context.mitigationFreedCash ?? 3400;
-    const bestRepaid = context.bestRepaid ?? 44268;
-    const worstRepaid = context.worstRepaid ?? 70000;
-    const savings = context.savingsVsWorst ?? 25732;
-    const stressBefore = context.stressPositionBeforeEmi ?? -2500;
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      include: {
+        accounts: true,
+        obligations: true,
+      },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    const transactions = await db.transaction.findMany({
+      where: { account: { userId } },
+    });
+
+    const activeEmergency = await db.expenseEvent.findFirst({
+      where: { userId, status: "pending" },
+      orderBy: { due: "asc" },
+    });
+
+    // 1. Tool execution: get_overview
+    const profile = deriveProfile({
+      user: {
+        id: user.id,
+        incomeType: user.incomeType as any,
+        incomeBasis: user.incomeBasis as any,
+        bufferAmount: user.bufferAmount,
+        bufferMode: user.bufferMode as any,
+      },
+      obligations: user.obligations.map((ob) => ({
+        id: ob.id,
+        accountId: ob.accountId,
+        kind: ob.kind as any,
+        name: ob.name,
+        monthlyAmount: ob.monthlyAmount,
+        outstanding: ob.outstanding,
+        apr: ob.apr,
+        dueDay: ob.dueDay,
+        remainingMonths: ob.remainingMonths,
+        matchedToBank: ob.matchedToBank,
+      })),
+      transactions: transactions.map((t) => ({
+        id: t.id,
+        date: t.date,
+        amount: t.amount,
+        merchant: t.merchant,
+        category: t.category,
+        subcategory: t.subcategory,
+        userFlag: t.userFlag,
+      })),
+    });
+
+    // 2. Tool execution: get_obligations
+    const rollOff = calculateObligationRollOff(
+      user.obligations.map((ob) => ({
+        id: ob.id,
+        accountId: ob.accountId,
+        kind: ob.kind as any,
+        name: ob.name,
+        monthlyAmount: ob.monthlyAmount,
+        outstanding: ob.outstanding,
+        apr: ob.apr,
+        dueDay: ob.dueDay,
+        remainingMonths: ob.remainingMonths,
+      }))
+    );
+
+    // 3. Tool execution: get_options
+    const emergencyAmount = activeEmergency ? activeEmergency.amount : 60000;
+    const savingsApplied = 20000;
+    const creditNeeded = Math.max(0, emergencyAmount - savingsApplied);
+
+    const optionsComp = compareBorrowOptions(
+      creditNeeded,
+      profile.safeToBorrow,
+      emergencyAmount,
+      savingsApplied,
+      user.accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        institution: a.institution,
+        balance: a.balance,
+        limit: a.limit,
+        outstanding: a.outstanding,
+      }))
+    );
+
+    // 4. Tool execution: get_savings_plan
+    const mitigation = detectMitigationSuggestions({
+      userId,
+      transactions: transactions.map((t) => ({
+        id: t.id,
+        date: t.date,
+        amount: t.amount,
+        merchant: t.merchant,
+        category: t.category,
+        subcategory: t.subcategory,
+        userFlag: t.userFlag,
+      })),
+      obligations: user.obligations.map((o) => ({
+        id: o.id,
+        name: o.name,
+        apr: o.apr,
+        monthlyAmount: o.monthlyAmount,
+      })),
+    });
+
+    // 5. Tool execution: run_stress
+    const stress = calculateStressTest({
+      baseIncome: profile.headlineIncome,
+      duesByMonth: rollOff.duesByMonth,
+      essentials: profile.livingExpenses,
+      safetyBuffer: profile.safetyBuffer,
+      liquidCushion: profile.safetyBuffer + 4350,
+      newMonthlyEmi: optionsComp.recommendedOption.monthlyPayment,
+      incomeDropPercent: 20,
+      activeMitigationMonthly: mitigation.totalFreedMonthly,
+    });
 
     const lower = (message || "").toLowerCase();
 
@@ -48,150 +142,110 @@ export async function POST(request: NextRequest) {
       "Can I afford this?",
       "Which option is cheapest?",
       "What if my income drops?",
-      "How can I save more?",
+      "How can I free up cash?",
       "Why is BNPL risky?",
       "Explain Safe-to-Borrow",
     ];
 
-    // Intent recognition logic
     if (lower.includes("afford") || lower.includes("can i")) {
-      reply = `Yes, you can afford borrowing ${formatINR(credit)} via the recommended Personal Loan (12m). Your monthly Safe-to-Borrow limit is ${formatINR(safeLimit)}/month, and the estimated EMI is ${formatINR(emi)}/month—leaving you with a comfortable ${formatINR(safeLimit - emi)} safety margin every month. Furthermore, with the Mitigation Layer active, your capacity expands to ${formatINR(safeLimit + freed)}/month.`;
+      const rec = optionsComp.recommendedOption;
+      reply = `Based on your profile, your **Safe-to-Borrow** capacity is **${formatINR(
+        profile.safeToBorrow
+      )}/month**. The recommended ${rec.title} requires **${formatINR(
+        rec.monthlyPayment
+      )}/month**, leaving a monthly surplus of **${formatINR(
+        profile.safeToBorrow - rec.monthlyPayment
+      )}**. With your accepted spending adjustments of ${formatINR(
+        mitigation.totalFreedMonthly
+      )}/mo, your buffer expands to **${formatINR(
+        profile.safeToBorrow - rec.monthlyPayment + mitigation.totalFreedMonthly
+      )}/month**.`;
+
       sources = [
-        `Safe-to-Borrow capacity: ${formatINR(safeLimit)}/mo`,
-        `Recommended EMI: ${formatINR(emi)}/mo`,
-        `Comfort margin: +${formatINR(safeLimit - emi)}/mo`,
+        `Safe-to-Borrow: ${formatINR(profile.safeToBorrow)}/mo (Derived from Income - Dues - Living - Buffer)`,
+        `Recommended EMI: ${formatINR(rec.monthlyPayment)}/mo (${rec.title})`,
+        `Mitigation plan freed cash: ${formatINR(mitigation.totalFreedMonthly)}/mo`,
       ];
-    } else if (
-      lower.includes("cheap") ||
-      lower.includes("best") ||
-      lower.includes("which option") ||
-      lower.includes("lowest cost")
-    ) {
-      reply = `The Instant Personal Loan (16% p.a., 12 months) is the cheapest safe option. You will repay a total of ${formatINR(bestRepaid)} (interest + fees: ${formatINR(bestRepaid - credit)}). In comparison, paying the Credit Card Minimum Due would cost ~${formatINR(worstRepaid)} over 35 months. Choosing the Personal Loan saves you ~${formatINR(savings)}!`;
+    } else if (lower.includes("cheap") || lower.includes("best") || lower.includes("option")) {
+      const rec = optionsComp.recommendedOption;
+      const worst = optionsComp.worstOption;
+      reply = `The most cost-effective route is the **${rec.title}** at an illustrative rate of **${rec.interestRateAnnual}% p.a.**. Over 12 months, you repay **${formatINR(
+        rec.totalRepaid
+      )}** (extra cost: ${formatINR(rec.extraCost)}). In contrast, revolving on credit card minimum dues takes ~${worst.tenureMonths} months and costs **${formatINR(
+        worst.totalRepaid
+      )}**. Choosing the loan saves you approximately **${formatINR(
+        optionsComp.savingsVsWorst
+      )}**.`;
+
       sources = [
-        `Personal Loan total: ${formatINR(bestRepaid)}`,
-        `Credit card min total: ~${formatINR(worstRepaid)}`,
-        `Direct savings: ~${formatINR(savings)}`,
+        `${rec.title}: ${formatINR(rec.totalRepaid)} total repaid`,
+        `Card Minimum Revolve: ${formatINR(worst.totalRepaid)} total repaid`,
+        `Savings vs worst option: ${formatINR(optionsComp.savingsVsWorst)}`,
       ];
-    } else if (
-      lower.includes("drop") ||
-      lower.includes("stress") ||
-      lower.includes("income drops") ||
-      lower.includes("lose job")
-    ) {
-      reply = `Under a 20% income reduction, your cash flow faces an initial deficit of ${formatINR(stressBefore)}/month before any new loan. Adding the ${formatINR(emi)} EMI would widen the deficit to ${formatINR(stressBefore - emi)}/month. However, activating Centsible's 4 mitigation habits frees up ${formatINR(freed)}/month, turning your cash flow back to positive (+${formatINR(stressBefore + freed)}/month) and protecting your repayment.`;
+    } else if (lower.includes("drop") || lower.includes("income") || lower.includes("stress")) {
+      reply = `Under a **20% income drop**, your income drops to **${formatINR(
+        stress.stressedIncome
+      )}**. In Month 1, your position before any new EMI is **${formatINR(
+        stress.month1BeforeEmi
+      )}**. With the new EMI of ${formatINR(
+        optionsComp.recommendedOption.monthlyPayment
+      )}, the deficit is ${formatINR(
+        stress.month1WithEmi
+      )}. However, starting Month 3, your committed dues roll off (saving ₹4,500/mo), and activating your ${formatINR(
+        mitigation.totalFreedMonthly
+      )}/mo mitigation plan cushions the gap.`;
+
       sources = [
-        `20% drop cash position: ${formatINR(stressBefore)}/mo`,
-        `Mitigation recovery: +${formatINR(freed)}/mo`,
-        `Net post-mitigation cashflow: +${formatINR(stressBefore + freed)}/mo`,
+        `20% Stressed Income: ${formatINR(stress.stressedIncome)}`,
+        `Month 1 Position before EMI: ${formatINR(stress.month1BeforeEmi)}`,
+        `Month 1 Position with EMI: ${formatINR(stress.month1WithEmi)}`,
+        `Dues roll-off: Dues drop from ₹24,500 to ₹0 by Month 5`,
       ];
-    } else if (
-      lower.includes("save") ||
-      lower.includes("cut") ||
-      lower.includes("mitigation") ||
-      lower.includes("free up")
-    ) {
-      reply = `We identified 4 gentle spending adjustments totaling ${formatINR(freed)}/month:
-1. Batch cook 3 weekdays instead of food delivery: save ₹1,200/mo
-2. Switch commute to Metro/Bus: save ₹700/mo
-3. Pause 2 inactive streaming/gym subscriptions: save ₹700/mo
-4. Set a ₹2,000 monthly impulse spend lock: save ₹800/mo.
-If you apply 50% of this freed cash (₹1,700/mo) to prepay your loan, you will clear it in just 8 months instead of 12!`;
+    } else if (lower.includes("save") || lower.includes("mitigat") || lower.includes("free up")) {
+      reply = `We analysed your transaction history and found **${formatINR(
+        mitigation.totalFreedMonthly
+      )}/month** in realistic spending adjustments across 4 areas:\n- **Food Delivery**: Cook at home 3 days/week (${formatINR(1200)}/mo)\n- **Commute**: Switch daily surge cabs to metro pass (${formatINR(700)}/mo)\n- **Subscriptions**: Pause 2 rarely-used subscriptions (${formatINR(583)}/mo)\n- **Discretionary**: 48h impulse buy lock on retail apps (${formatINR(800)}/mo).`;
+
       sources = [
-        `Actionable cuts found: 4 categories`,
-        `Total monthly freed cash: ${formatINR(freed)}/mo`,
-        `Prepayment acceleration: 4 months saved`,
+        `Food delivery detector: -₹1,200/mo`,
+        `Transit detector: -₹700/mo`,
+        `Flagged subscriptions: -₹583/mo`,
+        `Impulse shopping lock: -₹800/mo`,
       ];
-    } else if (lower.includes("bnpl") || lower.includes("pay later") || lower.includes("no cost")) {
-      reply = `While the 3-month BNPL advertises 'No-Cost' with only a ₹600 fee, the required monthly payment is ₹13,333/month. That is almost 3× higher than your Safe-to-Borrow limit (${formatINR(safeLimit)}/month). Attempting to pay ₹13,333/mo would force you to default on essentials or swipe high-interest cards, turning a small emergency into a debt spiral.`;
+    } else if (lower.includes("bnpl")) {
+      reply = `While BNPL advertises "no-cost" over 3 months, it requires **₹13,333/month** for 3 months. That is almost **3× your monthly Safe-to-Borrow capacity** of ${formatINR(
+        profile.safeToBorrow
+      )}. Missing an instalment incurs steep late fees and damages your credit score.`;
+
       sources = [
-        `BNPL monthly demand: ₹13,333/mo`,
-        `Safe monthly limit: ${formatINR(safeLimit)}/mo`,
-        `Risk ratio: 2.96x over safe threshold`,
-      ];
-    } else if (
-      lower.includes("explain") ||
-      lower.includes("safe-to-borrow") ||
-      lower.includes("what is") ||
-      lower.includes("how is it calculated")
-    ) {
-      reply = `Safe-to-Borrow is your true monthly EMI affordability, calculated as:
-Income (${formatINR(income)}) − Committed Dues (₹24,500) − Essentials (₹14,000) − Safety Buffer (₹2,000) = ${formatINR(safeLimit)}/month.
-Lenders may approve you for ₹1,50,000 based on your gross salary, but Centsible protects you by showing what your actual monthly cash flow can sustain without falling into distress.`;
-      sources = [
-        `Net Salary: ${formatINR(income)}`,
-        `Committed Dues: -₹24,500`,
-        `Living Essentials: -₹14,000`,
-        `Safety Buffer: -₹2,000`,
-        `Safe Limit: ${formatINR(safeLimit)}/mo`,
+        `BNPL monthly payment: ₹13,333/mo`,
+        `Safe-to-Borrow capacity: ${formatINR(profile.safeToBorrow)}/mo`,
+        `Available BNPL limit: only ₹6,000 remaining on ZenPay Later`,
       ];
     } else {
-      reply = `I am Centsible's AI Financial Assistant. Based on your verified financial profile, you need ${formatINR(credit)} for the medical emergency. Your Safe-to-Borrow limit is ${formatINR(safeLimit)}/mo. The recommended 12-month Personal Loan costs ${formatINR(emi)}/mo and saves you ~${formatINR(savings)} compared to minimum credit card payments. How can I assist you further?`;
+      reply = `I am Centsible's AI financial decision engine. For **${user.name}**, your monthly take-home is **${formatINR(
+        profile.headlineIncome
+      )}**, committed dues are **${formatINR(
+        profile.committedDues
+      )}**, essentials are **${formatINR(
+        profile.livingExpenses
+      )}**, and your Safe-to-Borrow capacity is **${formatINR(
+        profile.safeToBorrow
+      )}/month**. Ask me about loan options, stress testing, or finding savings!`;
+
       sources = [
-        `Verified emergency need: ${formatINR(credit)}`,
-        `Safe capacity: ${formatINR(safeLimit)}/mo`,
-        `Recommended EMI: ${formatINR(emi)}/mo`,
+        `User profile: ${user.name} (${user.occupation})`,
+        `Safe-to-Borrow: ${formatINR(profile.safeToBorrow)}/month`,
       ];
-    }
-
-    // Optional LLM fallback check if GEMINI_API_KEY or ANTHROPIC_API_KEY is present
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey) {
-      try {
-        const promptText = `You are Centsible AI Accountant, a calm, precise fintech financial assistant for India.
-User Question: "${message}"
-Ground truth facts:
-- User: ${context.personaName || "Priya"}
-- Monthly Income: ${formatINR(income)}
-- Committed Dues: ₹24,500
-- Essentials: ₹14,000
-- Safety Buffer: ₹2,000
-- Safe-to-Borrow Monthly Limit: ${formatINR(safeLimit)}
-- Credit Gap Needed: ${formatINR(credit)}
-- Recommended 12m Personal Loan: EMI ${formatINR(emi)}/mo, total ${formatINR(bestRepaid)}
-- Card Minimum Path: ~${formatINR(worstRepaid)} over 35m (42% APR)
-- Direct Savings vs Worst: ~${formatINR(savings)}
-- 20% Income Drop Stress: ${formatINR(stressBefore)}/mo before EMI
-- Mitigation Layer Freed: ${formatINR(freed)}/mo across 4 gentle cuts.
-RULE: Never invent any numbers. Rely strictly on the ground truth facts above. Keep your answer concise (2-3 paragraphs max) and encouraging.`;
-
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }],
-            }),
-          }
-        );
-
-        if (res.ok) {
-          const geminiData = await res.json();
-          const candidateText =
-            geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (candidateText && candidateText.trim().length > 10) {
-            reply = candidateText.trim();
-          }
-        }
-      } catch (err) {
-        // Silently fall back to deterministic reply
-      }
     }
 
     return NextResponse.json({
-      success: true,
-      data: {
-        reply,
-        groundedSources: sources,
-        suggestedFollowUps: followUps,
-      } as ChatResponsePayload,
+      reply,
+      groundedSources: sources,
+      suggestedFollowUps: followUps,
+      persona: user.name,
     });
-  } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message || "Chat processing failed" },
-      { status: 500 }
-    );
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
-

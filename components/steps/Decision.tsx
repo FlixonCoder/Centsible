@@ -20,7 +20,7 @@ export function Decision({ pipeline }: { pipeline: Pipeline }) {
   const { decisionResult: d, persona, safeToBorrowResult, mitigationImpact, optionsResult } = pipeline;
 
   const urgency = d.urgencyCheck.urgency;
-  const verdict = VERDICT_LABEL[d.primaryVerdict];
+  const verdict = (VERDICT_LABEL as any)[d.primaryVerdict];
 
   const reasonBodies = [
     `Only ${formatINR(d.recommendedOption.extraCost)} in interest and fees — the cheapest of the safe options.`,
@@ -73,7 +73,7 @@ export function Decision({ pipeline }: { pipeline: Pipeline }) {
 
       {/* Reasons */}
       <div className="mt-5 grid grid-cols-3 gap-5">
-        {d.reasons.map((_, i) => {
+        {d.reasons.map((_: any, i: number) => {
           const Icon = REASON_ICONS[i];
           return (
             <Reveal key={i} delay={0.15 + i * 0.08}>
@@ -110,7 +110,7 @@ export function Decision({ pipeline }: { pipeline: Pipeline }) {
           </Card>
 
           <div className="grid grid-cols-3 gap-3">
-            {d.alternatives.map((a) => (
+            {d.alternatives.map((a: any) => (
               <div
                 key={a.type}
                 className={cn(
@@ -119,7 +119,7 @@ export function Decision({ pipeline }: { pipeline: Pipeline }) {
                 )}
               >
                 <div className={cn("text-[13px] font-extrabold", a.isRecommended ? "text-safe-text" : "text-slate-500")}>
-                  {VERDICT_LABEL[a.type]}
+                  {(VERDICT_LABEL as any)[a.type]}
                 </div>
                 <div className="mt-0.5 line-clamp-3 text-[12px] leading-snug text-slate-400">{a.reason}</div>
               </div>

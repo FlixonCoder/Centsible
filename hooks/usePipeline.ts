@@ -209,7 +209,7 @@ export function usePipeline() {
   );
 
   const selectedOption =
-    optionsResult.options.find((o) => o.id === selectedOptionId) || optionsResult.recommendedOption;
+    optionsResult.options.find((o: any) => o.id === selectedOptionId) || optionsResult.recommendedOption;
 
   const stressTestResult: StressTestResult = calculateStressTest({
     baseIncome: persona.monthlyIncome,

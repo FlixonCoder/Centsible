@@ -1,114 +1,187 @@
-export interface StressTestInput {
-  baseIncome: number;
-  committedDues: number;
-  essentials: number;
-  safetyBuffer: number;
-  newMonthlyEmi: number;
-  incomeDropPercent: number; // e.g. 20 for 20%
-  tenureMonths?: number;
-}
+import { createTrace, TraceEntry } from "./trace";
 
-export interface MonthProjection {
+export interface StressProjectionMonth {
   month: number;
   monthLabel: string;
   stressedIncome: number;
-  committedDues: number;
+  dues: number;
   essentials: number;
-  positionBeforeEmi: number; // Stressed Income - Dues - Essentials
+  positionBeforeEmi: number;
   newEmi: number;
-  positionWithEmi: number; // Position before EMI - newEmi
-  isDeficit: boolean;
-  cumulativeShortfall: number;
+  positionWithEmi: number;
+  positionWithPlan: number;
+  cumulativeShortfallNoPlan: number;
+  cumulativeShortfallWithPlan: number;
 }
 
-export interface StressTestResult {
-  incomeDropPercent: number;
-  stressedIncome: number;
-  incomeDropAmount: number;
-  committedDues: number;
+export interface StressTestEngineInput {
+  baseIncome: number;
+  duesByMonth?: number[]; // 12 months array
+  committedDues?: number; // fallback for legacy callers
   essentials: number;
-  monthlyPositionBeforeEmi: number; // -2,500 for Priya at 20%
-  monthlyPositionWithEmi: number; // -6,130 for Priya with 3,630 EMI
-  status: "CRITICAL_RISK" | "MODERATE_RISK" | "RESILIENT";
-  flagBanner: string;
-  headlineExplanation: string;
-  projections: MonthProjection[];
-  shortfallTotal6Months: number;
-  shortfallTotal12Months: number;
+  safetyBuffer: number;
+  liquidCushion?: number; // e.g. buffer (2,000) + remaining cash in savings (4,350) = 6,350
+  newMonthlyEmi: number;
+  incomeDropPercent?: number; // default 20
+  activeMitigationMonthly?: number; // e.g. 3,283
+  scenario?: "income_drop" | "job_gap" | "surprise_expense";
 }
 
-export function calculateStressTest(input: StressTestInput): StressTestResult {
+export interface StressTestEngineResult {
+  incomeDropPercent: number;
+  scenario: string;
+  stressedIncome: number;
+  month1BeforeEmi: number; // -2,500
+  month1WithEmi: number; // -6,130
+  monthlyPositionBeforeEmi: number; // legacy alias
+  monthlyPositionWithEmi: number; // legacy alias
+  status: "CRITICAL_RISK" | "HIGH_RISK" | "MODERATE_RISK" | "SAFE" | "RESILIENT";
+  worstMonthlyGap: number;
+  monthsInDeficit: number;
+  peakCumulativeShortfall: number; // without plan
+  peakCumulativeShortfallWithPlan: number;
+  cushion: number;
+  passesWithoutPlan: boolean;
+  passesWithPlan: boolean;
+  projections: StressProjectionMonth[];
+  headlineBanner: string;
+  trace: TraceEntry;
+}
+
+export type StressTestResult = StressTestEngineResult;
+
+export function calculateStressTest(input: StressTestEngineInput): StressTestEngineResult {
+  const startTime = performance.now();
+
   const {
     baseIncome,
+    duesByMonth: inputDues,
     committedDues,
     essentials,
+    safetyBuffer,
+    liquidCushion = safetyBuffer,
     newMonthlyEmi,
-    incomeDropPercent,
-    tenureMonths = 12,
+    incomeDropPercent = 20,
+    activeMitigationMonthly = 0,
+    scenario = "income_drop",
   } = input;
+
+  const duesByMonth = inputDues || (committedDues !== undefined ? Array(12).fill(committedDues) : Array(12).fill(24500));
 
   const dropFactor = incomeDropPercent / 100;
   const stressedIncome = Math.round(baseIncome * (1 - dropFactor));
-  const incomeDropAmount = baseIncome - stressedIncome;
 
-  // Exact deck calculation: Stressed Income - Committed Dues - Essentials
+  // Month 1 exact deck calculation: Stressed Income - Month 1 Dues - Essentials
   // (Buffer is NOT subtracted here to match the deck's -2,500 baseline)
-  const monthlyPositionBeforeEmi = stressedIncome - committedDues - essentials;
-  const monthlyPositionWithEmi = monthlyPositionBeforeEmi - newMonthlyEmi;
+  const m1Dues = duesByMonth[0] ?? 24500;
+  const month1BeforeEmi = stressedIncome - m1Dues - essentials;
+  const month1WithEmi = month1BeforeEmi - newMonthlyEmi;
 
-  const projections: MonthProjection[] = [];
-  let runningShortfall = 0;
+  const projections: StressProjectionMonth[] = [];
+  let cumShortfallNoPlan = 0;
+  let cumShortfallWithPlan = 0;
+  let peakShortfallNoPlan = 0;
+  let peakShortfallWithPlan = 0;
+  let monthsInDeficit = 0;
+  let worstMonthlyGap = 0;
 
-  for (let m = 1; m <= tenureMonths; m++) {
-    const isDeficit = monthlyPositionWithEmi < 0;
-    if (isDeficit) {
-      runningShortfall += Math.abs(monthlyPositionWithEmi);
+  for (let m = 0; m < 12; m++) {
+    const monthNum = m + 1;
+    let monthIncome = stressedIncome;
+
+    // Scenarios handling
+    if (scenario === "job_gap" && monthNum === 1) {
+      monthIncome = 0; // 1 month without pay
     }
+
+    const monthDues = duesByMonth[m] !== undefined ? duesByMonth[m] : 0;
+    let monthEssentials = essentials;
+    if (scenario === "surprise_expense" && monthNum === 2) {
+      monthEssentials += 10000;
+    }
+
+    const posBeforeEmi = monthIncome - monthDues - monthEssentials;
+    const posWithEmi = posBeforeEmi - newMonthlyEmi;
+    const posWithPlan = posWithEmi + activeMitigationMonthly;
+
+    if (posWithEmi < 0) {
+      monthsInDeficit++;
+      cumShortfallNoPlan += Math.abs(posWithEmi);
+      worstMonthlyGap = Math.min(worstMonthlyGap, posWithEmi);
+    }
+    peakShortfallNoPlan = Math.max(peakShortfallNoPlan, cumShortfallNoPlan);
+
+    if (posWithPlan < 0) {
+      cumShortfallWithPlan += Math.abs(posWithPlan);
+    }
+    peakShortfallWithPlan = Math.max(peakShortfallWithPlan, cumShortfallWithPlan);
+
     projections.push({
-      month: m,
-      monthLabel: `M${m}`,
-      stressedIncome,
-      committedDues,
-      essentials,
-      positionBeforeEmi: monthlyPositionBeforeEmi,
+      month: monthNum,
+      monthLabel: `M${monthNum}`,
+      stressedIncome: monthIncome,
+      dues: monthDues,
+      essentials: monthEssentials,
+      positionBeforeEmi: posBeforeEmi,
       newEmi: newMonthlyEmi,
-      positionWithEmi: monthlyPositionWithEmi,
-      isDeficit,
-      cumulativeShortfall: runningShortfall,
+      positionWithEmi: posWithEmi,
+      positionWithPlan: posWithPlan,
+      cumulativeShortfallNoPlan: cumShortfallNoPlan,
+      cumulativeShortfallWithPlan: cumShortfallWithPlan,
     });
   }
 
-  const shortfallTotal6Months = Math.abs(Math.min(0, monthlyPositionWithEmi)) * 6;
-  const shortfallTotal12Months = Math.abs(Math.min(0, monthlyPositionWithEmi)) * 12;
+  const cushion = Math.max(safetyBuffer, liquidCushion);
+  const passesWithoutPlan = peakShortfallNoPlan <= cushion;
+  const passesWithPlan = peakShortfallWithPlan <= cushion;
 
-  let status: "CRITICAL_RISK" | "MODERATE_RISK" | "RESILIENT" = "RESILIENT";
-  let flagBanner = "Your budget holds safely under stress.";
-  let headlineExplanation = "Even with an income dip, cash flow remains positive.";
-
-  if (monthlyPositionBeforeEmi < 0) {
-    status = "CRITICAL_RISK";
-    flagBanner = "Flagged BEFORE she borrows: Deficit detected even without new EMI!";
-    headlineExplanation = `A ${incomeDropPercent}% drop causes a ₹${Math.abs(monthlyPositionBeforeEmi).toLocaleString("en-IN")}/mo shortfall on fixed obligations alone. Adding EMI pushes deficit to ₹${Math.abs(monthlyPositionWithEmi).toLocaleString("en-IN")}/mo.`;
-  } else if (monthlyPositionWithEmi < 0) {
-    status = "MODERATE_RISK";
-    flagBanner = "Caution: New EMI breaches your stressed cash flow.";
-    headlineExplanation = `Your baseline expenses are covered, but adding ₹${newMonthlyEmi.toLocaleString("en-IN")}/mo causes a ₹${Math.abs(monthlyPositionWithEmi).toLocaleString("en-IN")}/mo monthly deficit.`;
+  let headlineBanner = "Budget holds safely under stress.";
+  if (month1BeforeEmi < 0) {
+    headlineBanner = `Flagged BEFORE she borrows: −₹${Math.abs(month1BeforeEmi).toLocaleString("en-IN")}/mo deficit in Month 1!`;
+  } else if (month1WithEmi < 0) {
+    headlineBanner = "Caution: New EMI breaches stressed cash flow in early months.";
   }
+
+  const trace = createTrace(
+    "StressAndShock",
+    { incomeDropPercent, newMonthlyEmi, activeMitigationMonthly, cushion },
+    "Project 12 months with dues roll-off; check peak cumulative shortfall <= cushion",
+    {
+      month1BeforeEmi,
+      month1WithEmi,
+      peakShortfallNoPlan,
+      peakShortfallWithPlan,
+      passesWithoutPlan,
+      passesWithPlan,
+    },
+    startTime
+  );
+
+  const status =
+    month1BeforeEmi < 0 || month1WithEmi < 0
+      ? "CRITICAL_RISK"
+      : monthsInDeficit > 0
+      ? "HIGH_RISK"
+      : "RESILIENT";
 
   return {
     incomeDropPercent,
+    scenario,
     stressedIncome,
-    incomeDropAmount,
-    committedDues,
-    essentials,
-    monthlyPositionBeforeEmi,
-    monthlyPositionWithEmi,
+    month1BeforeEmi,
+    month1WithEmi,
+    monthlyPositionBeforeEmi: month1BeforeEmi,
+    monthlyPositionWithEmi: month1WithEmi,
     status,
-    flagBanner,
-    headlineExplanation,
+    worstMonthlyGap,
+    monthsInDeficit,
+    peakCumulativeShortfall: peakShortfallNoPlan,
+    peakCumulativeShortfallWithPlan: peakShortfallWithPlan,
+    cushion,
+    passesWithoutPlan,
+    passesWithPlan,
     projections,
-    shortfallTotal6Months,
-    shortfallTotal12Months,
+    headlineBanner,
+    trace,
   };
 }
-
