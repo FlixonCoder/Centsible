@@ -8,7 +8,7 @@ export async function GET() {
 
     const decisions = await db.decision.findMany({
       where: {
-        event: { userId },
+        userId,
       },
       include: {
         event: true,

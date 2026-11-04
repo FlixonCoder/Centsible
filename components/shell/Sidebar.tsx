@@ -16,6 +16,7 @@ import {
   Layers,
   Leaf,
   LogOut,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatINR } from "@/lib/format";
@@ -47,6 +48,7 @@ export function Sidebar({
     { href: "/cash-flow", label: "Cash Flow", icon: ArrowLeftRight },
     { href: "/obligations", label: "Obligations", icon: CreditCard },
     { href: "/decision", label: "Decision Lab", icon: Compass, badge: "Core" },
+    { href: "/stress-test", label: "Stress Testing", icon: Activity },
     { href: "/savings", label: "Savings Finder", icon: PiggyBank },
     { href: "/data", label: "Data & Consent", icon: ShieldCheck },
     { href: "/settings", label: "Settings", icon: Sliders },

@@ -18,18 +18,35 @@ export async function POST(request: Request) {
     } = body;
 
     let targetEventId = eventId;
+    if (targetEventId) {
+      const exists = await db.expenseEvent.findUnique({ where: { id: targetEventId } });
+      if (!exists) targetEventId = null;
+    }
+
     if (!targetEventId) {
       const activeEvent = await db.expenseEvent.findFirst({
-        where: { userId, status: "pending" },
+        where: { userId, status: { in: ["active", "pending"] } },
+        orderBy: { due: "asc" },
       });
       targetEventId = activeEvent?.id;
     }
 
     if (!targetEventId) {
-      return NextResponse.json(
-        { error: "No expense event specified or found" },
-        { status: 400 }
-      );
+      // Create a default event for this user if none exists
+      const newEvent = await db.expenseEvent.create({
+        data: {
+          userId,
+          title: "Emergency Medical Bill",
+          category: "medical",
+          amount: 60000,
+          due: "2026-11-06",
+          urgency: "high",
+          canDelay: false,
+          providerOffersInstalments: "unknown",
+          status: "active",
+        },
+      });
+      targetEventId = newEvent.id;
     }
 
     const decision = await db.decision.create({

@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     }
     if (!event) {
       event = await db.expenseEvent.findFirst({
-        where: { userId, status: "pending" },
+        where: { userId, status: { in: ["active", "pending"] } },
         orderBy: { due: "asc" },
       });
     }

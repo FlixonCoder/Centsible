@@ -27,6 +27,8 @@ import {
   ChevronRight,
   Activity,
   Layers,
+  HelpCircle,
+  Calculator,
 } from "lucide-react";
 import { formatINR } from "@/lib/format";
 import {
@@ -39,15 +41,15 @@ import {
   CartesianGrid,
   Cell,
 } from "recharts";
+import { MinimizableDataFlow } from "@/components/pipeline/MinimizableDataFlow";
 
 const STEPS = [
-  { id: 1, name: "Expense", label: "Expense Event" },
+  { id: 1, name: "Expense", label: "Emergency Bill" },
   { id: 2, name: "Savings", label: "Apply Savings" },
   { id: 3, name: "Capacity", label: "Safe-to-Borrow" },
   { id: 4, name: "Options", label: "Compare Options" },
-  { id: 5, name: "Stress", label: "Stress Test" },
-  { id: 6, name: "Plan", label: "Mitigation Plan" },
-  { id: 7, name: "Verdict", label: "Decision Verdict" },
+  { id: 5, name: "Plan", label: "Mitigation Plan" },
+  { id: 6, name: "Verdict", label: "Decision Verdict" },
 ];
 
 export default function DecisionLabPage() {
@@ -56,12 +58,12 @@ export default function DecisionLabPage() {
   const [loading, setLoading] = useState(true);
   const [savingDecision, setSavingDecision] = useState(false);
   const [decisionSaved, setDecisionSaved] = useState(false);
+  const [showMath, setShowMath] = useState(false);
+  const [selectedOptionId, setSelectedOptionId] = useState("personal_loan_12m");
 
   // Decision inputs
   const [emergencyAmount, setEmergencyAmount] = useState(60000);
   const [savingsApplied, setSavingsApplied] = useState(20000);
-  const [incomeDropPercent, setIncomeDropPercent] = useState(20);
-  const [scenario, setScenario] = useState("income_drop");
   const [activeMitigationIds, setActiveMitigationIds] = useState<string[]>([
     "cut_food_delivery",
     "cut_cab_rides",
@@ -71,7 +73,6 @@ export default function DecisionLabPage() {
 
   // Engine run response
   const [engineData, setEngineData] = useState<any>(null);
-  const [selectedTraceStage, setSelectedTraceStage] = useState<string | null>(null);
 
   const runEngine = async () => {
     try {
@@ -81,9 +82,8 @@ export default function DecisionLabPage() {
         body: JSON.stringify({
           emergencyAmount,
           savingsApplied,
-          incomeDropPercent,
           activeMitigationIds,
-          scenario,
+          incomeDropPercent: 20,
         }),
       });
       const data = await res.json();
@@ -97,7 +97,7 @@ export default function DecisionLabPage() {
 
   useEffect(() => {
     runEngine();
-  }, [emergencyAmount, savingsApplied, incomeDropPercent, activeMitigationIds, scenario]);
+  }, [emergencyAmount, savingsApplied, activeMitigationIds]);
 
   const toggleMitigation = (id: string) => {
     setActiveMitigationIds((prev) =>
@@ -105,27 +105,44 @@ export default function DecisionLabPage() {
     );
   };
 
-  const handleSaveDecision = async () => {
-    if (!engineData) return;
+  const handleSaveDecision = async (): Promise<boolean> => {
+    if (!engineData) return false;
     setSavingDecision(true);
     try {
-      await fetch("/api/decision/save", {
+      const res = await fetch("/api/decision/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           eventId: engineData.eventId,
-          inputsJson: { emergencyAmount, savingsApplied, incomeDropPercent, activeMitigationIds },
+          inputsJson: { emergencyAmount, savingsApplied, activeMitigationIds },
           resultJson: engineData.decision,
           traceJson: engineData.traces,
-          selectedOptionId: engineData.decision.selectedOption?.id || "personal_loan_12m",
-          verdict: engineData.decision.verdictTier,
+          selectedOptionId: selectedOptionId || "personal_loan_12m",
+          verdict: engineData.decision?.verdictTier || "SAFE_WITH_PLAN",
         }),
       });
-      setDecisionSaved(true);
+      const resJson = await res.json();
+      if (resJson.success) {
+        setDecisionSaved(true);
+        setSavingDecision(false);
+        return true;
+      }
       setSavingDecision(false);
+      return false;
     } catch (err) {
-      console.error(err);
+      console.error("Failed to save decision", err);
       setSavingDecision(false);
+      return false;
+    }
+  };
+
+  const handleFinishAndSave = async () => {
+    const ok = await handleSaveDecision();
+    if (ok) {
+      router.push("/decision");
+      router.refresh();
+    } else {
+      router.push("/decision");
     }
   };
 
@@ -138,8 +155,16 @@ export default function DecisionLabPage() {
     );
   }
 
-  const { profile, optionsComparison, stressResult, mitigation, decision, traces } = engineData;
+  const { profile, optionsComparison, mitigation, decision, traces } = engineData;
   const creditNeeded = Math.max(0, emergencyAmount - savingsApplied);
+
+  // Chart data for side-by-side total costs
+  const comparisonChartData = optionsComparison.options.map((opt: any) => ({
+    name: opt.title.split("(")[0].trim(),
+    total: opt.totalRepaid,
+    extra: opt.extraCost,
+    isRec: opt.isRecommended,
+  }));
 
   return (
     <div className="space-y-6">
@@ -154,7 +179,7 @@ export default function DecisionLabPage() {
               <button
                 key={step.id}
                 onClick={() => setCurrentStep(step.id)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   isActive
                     ? "bg-[#2B2A6E] text-white shadow-xs"
                     : isDone
@@ -173,30 +198,36 @@ export default function DecisionLabPage() {
                 >
                   {isDone ? "✓" : step.id}
                 </span>
-                <span className="hidden sm:inline">{step.label}</span>
-                <span className="sm:hidden">{step.name}</span>
+                <span>{step.label}</span>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Main Grid: Screen Stage (8 cols) + Real-Time Decision Trace Audit Panel (4 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* Main Layout: Minimizable Data Flow Panel on Left + Main Simulation Stage */}
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+        {/* Left-Side Minimizable Data Flow Window */}
+        <MinimizableDataFlow
+          currentStep={currentStep}
+          onSelectStep={(s) => setCurrentStep(s)}
+          engineData={engineData}
+        />
+
         {/* Main Stage */}
-        <div className="lg:col-span-8 space-y-6">
+        <div className="flex-1 min-w-0 space-y-6 w-full">
           {/* STEP 1: EXPENSE EVENT */}
           {currentStep === 1 && (
             <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  Step 1 of 7
+                  Step 1 of 6
                 </span>
                 <h2 className="text-xl sm:text-2xl font-extrabold text-[#1E1B4B] mt-1">
-                  Urgent Emergency Bill
+                  Urgent Emergency Expense
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Specify the emergency expense requiring immediate financing.
+                  Specify the emergency bill requiring immediate financing.
                 </p>
               </div>
 
@@ -232,7 +263,7 @@ export default function DecisionLabPage() {
                     <input
                       type="text"
                       defaultValue="Friday, 6 Nov 2026"
-                      className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 bg-slate-50 text-slate-600"
+                      className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 bg-slate-50 text-slate-600 font-medium"
                     />
                   </div>
                 </div>
@@ -255,7 +286,7 @@ export default function DecisionLabPage() {
             <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  Step 2 of 7
+                  Step 2 of 6
                 </span>
                 <h2 className="text-xl sm:text-2xl font-extrabold text-[#1E1B4B] mt-1">
                   Bill Split: Savings vs Credit Gap
@@ -322,7 +353,7 @@ export default function DecisionLabPage() {
             <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  Step 3 of 7
+                  Step 3 of 6
                 </span>
                 <h2 className="text-xl sm:text-2xl font-extrabold text-[#1E1B4B] mt-1">
                   Safe-to-Borrow Waterfall
@@ -368,17 +399,20 @@ export default function DecisionLabPage() {
             </div>
           )}
 
-          {/* STEP 4: COMPARE TRUE COSTS */}
+          {/* STEP 4: COMPARE TRUE COSTS (REDESIGNED PREMIUM CARDS) */}
           {currentStep === 4 && (
             <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-4">
                 <div>
                   <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                    Step 4 of 7
+                    Step 4 of 6
                   </span>
                   <h2 className="text-xl sm:text-2xl font-extrabold text-[#1E1B4B] mt-1">
-                    Compare True Borrowing Options ({formatINR(creditNeeded)})
+                    What will {formatINR(creditNeeded)} really cost you?
                   </h2>
+                  <p className="text-xs text-slate-500">
+                    Same loan amount, four very different outcomes. Compare true monthly burdens and total repayments.
+                  </p>
                 </div>
                 <span className="text-[11px] text-slate-400 font-mono">Illustrative Rates</span>
               </div>
@@ -387,161 +421,191 @@ export default function DecisionLabPage() {
               <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 text-xs text-indigo-900 flex items-center gap-3">
                 <Zap className="w-4 h-4 text-indigo-600 shrink-0" />
                 <span>
-                  <strong>Break-even APR is ~59%:</strong> Priya only exceeds her Safe-to-Borrow capacity if loan interest surpasses 59% p.a.
+                  <strong>Break-even APR is ~59%:</strong> Priya only breaches her ₹4,500/mo Safe-to-Borrow limit if loan interest exceeds 59% p.a.
                 </span>
               </div>
 
-              {/* Options Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Redesigned 4 Cards Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {optionsComparison.options.map((opt: any) => {
                   const isRec = opt.isRecommended;
-                  const isAvail = opt.eligibility === "available";
+                  const isSafe = opt.verdict === "SAFE";
+                  const isSelected = selectedOptionId === opt.id;
+                  const isUnavailable = opt.eligibility !== "available";
 
                   return (
                     <div
                       key={opt.id}
-                      className={`rounded-2xl border p-4.5 space-y-3 transition-all ${
+                      onClick={() => setSelectedOptionId(opt.id)}
+                      className={`relative rounded-3xl p-6 text-left transition-all cursor-pointer flex flex-col justify-between ${
                         isRec
-                          ? "border-emerald-300 bg-emerald-50/30 ring-2 ring-emerald-500/20"
-                          : !isAvail
-                          ? "border-slate-200 bg-slate-50 opacity-75"
-                          : "border-slate-200 bg-white"
+                          ? "border-2 border-indigo-600 bg-gradient-to-b from-indigo-50/40 via-white to-white shadow-md ring-4 ring-indigo-500/10"
+                          : isUnavailable
+                          ? "border border-slate-200 bg-slate-50/80 opacity-75"
+                          : "border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-sm"
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
+                      {/* Top Badges */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
                           <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              opt.verdict === "SAFE"
-                                ? "bg-emerald-100 text-emerald-800"
-                                : "bg-rose-100 text-rose-800"
+                            className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-1 rounded-full ${
+                              isSafe
+                                ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                : "bg-rose-100 text-rose-800 border border-rose-200"
                             }`}
                           >
-                            {opt.verdict}
+                            {isSafe ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                            )}
+                            <span>{isSafe ? "Safe to Carry" : "High Risk"}</span>
                           </span>
-                          {!isAvail && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+
+                          {isUnavailable && (
+                            <span className="text-[10.5px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
                               Limit Exceeded
                             </span>
                           )}
                         </div>
+
                         {isRec && (
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                            RECOMMENDED
+                          <span className="inline-flex items-center gap-1 text-[11px] font-extrabold bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-3 py-1 rounded-full shadow-xs">
+                            <Sparkles className="w-3 h-3 text-amber-300" />
+                            <span>Recommended</span>
                           </span>
                         )}
                       </div>
 
-                      <div>
-                        <h4 className="text-sm font-bold text-[#1E1B4B]">{opt.title}</h4>
-                        <p className="text-[11px] text-slate-500">{opt.subtitle}</p>
+                      {/* Facility Title */}
+                      <div className="mb-4">
+                        <h3 className="text-base font-extrabold text-[#1E1B4B]">{opt.title}</h3>
+                        <p className="text-[11.5px] text-slate-500 font-medium">{opt.subtitle}</p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-100">
+                      {/* Hero Repayment Amount */}
+                      <div className="bg-[#F8F9FC] rounded-2xl p-4 border border-slate-200/80 mb-4 space-y-1">
+                        <div className="text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
+                          Total You&apos;ll Repay
+                        </div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-3xl font-extrabold text-[#1E1B4B] font-mono">
+                            {formatINR(opt.totalRepaid)}
+                          </span>
+                        </div>
+                        <div className="text-xs font-semibold">
+                          <span className="text-slate-500">Extra borrowing cost: </span>
+                          <span className={opt.extraCost > 10000 ? "text-rose-600 font-bold" : "text-[#1E1B4B] font-bold"}>
+                            +{formatINR(opt.extraCost)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Key Parameters Pill Strip */}
+                      <div className="grid grid-cols-2 gap-3 py-3 border-y border-slate-100 text-xs mb-3">
                         <div>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase">Monthly</p>
-                          <p className="font-extrabold text-[#1E1B4B] font-mono">
+                          <span className="text-[10.5px] text-slate-400 block font-semibold">Monthly EMI</span>
+                          <span
+                            className={`text-base font-extrabold font-mono ${
+                              opt.monthlyPayment > profile.safeToBorrow ? "text-rose-600" : "text-[#1E1B4B]"
+                            }`}
+                          >
                             {formatINR(opt.monthlyPayment)}
-                          </p>
+                            <span className="text-[11px] font-normal text-slate-500">/mo</span>
+                          </span>
                         </div>
+
                         <div>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase">Tenure</p>
-                          <p className="font-bold text-slate-700">{opt.tenureMonths} mos</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase">Total Repaid</p>
-                          <p className="font-mono font-bold text-slate-800">{formatINR(opt.totalRepaid)}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase">Extra Cost</p>
-                          <p className="font-mono font-bold text-rose-600">+{formatINR(opt.extraCost)}</p>
+                          <span className="text-[10.5px] text-slate-400 block font-semibold">Payoff Tenure</span>
+                          <span className="text-base font-extrabold text-[#1E1B4B]">
+                            {opt.tenureMonths} <span className="text-[11px] font-normal text-slate-500">months</span>
+                          </span>
                         </div>
                       </div>
 
-                      <p className="text-[10.5px] text-slate-500 italic pt-1">
-                        {opt.riskReason}
+                      {/* Plain-Language Verdict Explanation */}
+                      <p className="text-xs leading-relaxed text-slate-600">
+                        {isSafe
+                          ? isRec
+                            ? "Comfortably within your ₹4,500/mo limit, leaving an ₹870 surplus every month."
+                            : "Within your budget limit, but accumulates higher interest or upfront conversion fees."
+                          : opt.id === "card_min"
+                          ? `Extremely long payoff — ~35 months of 42% revolving interest accumulates ₹30k extra cost.`
+                          : `Monthly payment is ~${(opt.monthlyPayment / profile.safeToBorrow).toFixed(1)}× your safe limit.`}
                       </p>
                     </div>
                   );
                 })}
               </div>
+
+              {/* Side-by-Side Visual Comparison Chart */}
+              <div className="bg-[#F8F9FC] rounded-2xl p-5 border border-[#E8EAF3] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#1E1B4B]">
+                      Side-by-Side Lifetime Cost Comparison
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      Visualizing the ₹25,700 cost difference between the worst and best financing route
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setShowMath((v) => !v)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
+                  >
+                    <Calculator className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>{showMath ? "Hide Math" : "Show Formula & Fees"}</span>
+                  </button>
+                </div>
+
+                <div className="h-44 w-full pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={comparisonChartData}
+                      layout="vertical"
+                      margin={{ top: 5, right: 30, left: 40, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E8EAF3" />
+                      <XAxis type="number" tickLine={false} tick={{ fontSize: 10, fill: "#64748B" }} tickFormatter={(v) => `₹${v / 1000}k`} />
+                      <YAxis type="category" dataKey="name" tickLine={false} tick={{ fontSize: 11, fill: "#1E1B4B", fontWeight: 600 }} />
+                      <Tooltip
+                        formatter={(val: number) => [formatINR(val), "Total Repaid"]}
+                        contentStyle={{ backgroundColor: "#FFFFFF", borderRadius: "12px", border: "1px solid #E8EAF3", fontSize: "12px" }}
+                      />
+                      <Bar dataKey="total" radius={[0, 6, 6, 0]}>
+                        {comparisonChartData.map((entry: any, index: number) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={entry.isRec ? "#4F46E5" : entry.total > 60000 ? "#EF4444" : "#94A3B8"}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {showMath && (
+                  <div className="mt-3 pt-3 border-t border-slate-200 text-xs text-slate-600 space-y-2 bg-white p-4 rounded-xl">
+                    <p className="font-mono text-[11px] text-[#2B2A6E]">
+                      Standard Amortization EMI: P · r · (1 + r)ⁿ ÷ ((1 + r)ⁿ − 1)
+                    </p>
+                    <p className="text-[11.5px] text-slate-500">
+                      Card minimum amortizes monthly at 3.5%/month (42% APR). Personal loan applies 1.5% processing fee (+18% GST). Card EMI applies ₹999 fee (+18% GST).
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          {/* STEP 5: STRESS TEST */}
+          {/* STEP 5: MITIGATION PLAN */}
           {currentStep === 5 && (
             <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  Step 5 of 7
-                </span>
-                <h2 className="text-xl sm:text-2xl font-extrabold text-[#1E1B4B] mt-1">
-                  12-Month Stress Test with Dues Roll-Off
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Tests what happens if income drops by 20% while paying the new loan EMI.
-                </p>
-              </div>
-
-              {/* Stress Headline Banner */}
-              <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 space-y-1">
-                <div className="flex items-center gap-2 font-bold text-xs">
-                  <ShieldAlert className="w-4 h-4 text-rose-600" />
-                  <span>Flagged BEFORE she borrows:</span>
-                </div>
-                <p className="text-xs leading-relaxed">
-                  In Month 1 at −20% income, Priya faces a <strong className="font-mono">{formatINR(stressResult.month1BeforeEmi)}/mo</strong> deficit before any new loan, worsening to <strong className="font-mono">{formatINR(stressResult.month1WithEmi)}</strong> with the loan.
-                </p>
-              </div>
-
-              {/* Income Drop Slider */}
-              <div className="space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-bold text-slate-700">Simulate Income Drop</span>
-                  <span className="font-bold font-mono text-rose-600">{incomeDropPercent}%</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={40}
-                  step={5}
-                  value={incomeDropPercent}
-                  onChange={(e) => setIncomeDropPercent(Number(e.target.value))}
-                  className="w-full accent-rose-600 cursor-pointer"
-                />
-              </div>
-
-              {/* 12-Month Projections Bar Chart */}
-              <div className="h-56 w-full pt-2">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stressResult.projections} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F2F8" />
-                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: "#64748B" }} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: "#64748B" }} tickLine={false} tickFormatter={(v) => `₹${v / 1000}k`} />
-                    <Tooltip
-                      formatter={(val: number) => [formatINR(val)]}
-                      contentStyle={{ backgroundColor: "#FFFFFF", borderRadius: "12px", border: "1px solid #E8EAF3", fontSize: "12px" }}
-                    />
-                    <Bar dataKey="positionWithEmi" name="Cash Position with EMI">
-                      {stressResult.projections.map((entry: any, index: number) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={entry.positionWithEmi < 0 ? "#EF4444" : "#10B981"}
-                        />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          {/* STEP 6: MITIGATION PLAN */}
-          {currentStep === 6 && (
-            <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
-              <div>
-                <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  Step 6 of 7
+                  Step 5 of 6
                 </span>
                 <h2 className="text-xl sm:text-2xl font-extrabold text-[#1E1B4B] mt-1">
                   Mitigation Layer: Freeing Cash
@@ -562,8 +626,8 @@ export default function DecisionLabPage() {
                   </p>
                 </div>
                 <div className="text-right text-xs text-emerald-800">
-                  <span className="font-bold">Flips Month 1 Stress Positive!</span>
-                  <p className="text-[11px]">Safe-to-Borrow expands to {formatINR(profile.safeToBorrow + mitigation.activeMitigationMonthly)}</p>
+                  <span className="font-bold">Lifts Safe Margin to {formatINR(profile.safeToBorrow + mitigation.activeMitigationMonthly)}/mo</span>
+                  <p className="text-[11px]">Protects your buffer against sudden expenses</p>
                 </div>
               </div>
 
@@ -610,12 +674,12 @@ export default function DecisionLabPage() {
             </div>
           )}
 
-          {/* STEP 7: DECISION VERDICT */}
-          {currentStep === 7 && (
+          {/* STEP 6: DECISION VERDICT */}
+          {currentStep === 6 && (
             <div className="bg-white rounded-3xl border border-[#E8EAF3] p-6 sm:p-8 shadow-xs space-y-6">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  Step 7 of 7 · Final Recommendation
+                  Step 6 of 6 · Final Recommendation
                 </span>
                 <div className="flex items-center gap-3 mt-1">
                   <h2 className="text-2xl font-extrabold text-[#1E1B4B]">
@@ -641,6 +705,32 @@ export default function DecisionLabPage() {
                   </p>
                 </div>
                 <Sparkles className="w-10 h-10 text-emerald-200 shrink-0 hidden sm:block" />
+              </div>
+
+              {/* Dedicated Stress Test Link Card */}
+              <div className="p-4.5 rounded-2xl bg-gradient-to-r from-indigo-50/80 to-purple-50/60 border border-indigo-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                    <Activity className="w-5 h-5 text-cyan-300" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-[#1E1B4B]">
+                      Income Shock & Scenario Resilience Test
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Test job loss or a 20% salary cut in the separate Stress Testing Lab.
+                    </p>
+                  </div>
+                </div>
+
+                <Link
+                  href="/stress-test"
+                  target="_blank"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white text-indigo-700 text-xs font-bold border border-indigo-200 hover:bg-indigo-50 transition-colors shrink-0"
+                >
+                  <span>Open Stress Lab</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
               </div>
 
               {/* Why This Verdict */}
@@ -671,15 +761,15 @@ export default function DecisionLabPage() {
                 </div>
               )}
 
-              {/* Action Buttons: Save & Export */}
+              {/* Action Buttons: Save & Finish */}
               <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-slate-100">
                 <button
-                  onClick={handleSaveDecision}
-                  disabled={savingDecision || decisionSaved}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#2B2A6E] text-white text-xs font-bold hover:bg-[#4F46E5] shadow-xs disabled:opacity-50 transition-all"
+                  onClick={handleFinishAndSave}
+                  disabled={savingDecision}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 shadow-xs disabled:opacity-50 transition-all"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>{decisionSaved ? "Decision Saved ✓" : savingDecision ? "Saving..." : "Save Decision Snapshot"}</span>
+                  <span>{savingDecision ? "Saving to History..." : "Finish & Save to Decision History"}</span>
                 </button>
 
                 <button
@@ -689,6 +779,13 @@ export default function DecisionLabPage() {
                   <Download className="w-3.5 h-3.5 text-slate-400" />
                   <span>Export PDF / Print</span>
                 </button>
+
+                {decisionSaved && (
+                  <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Added to Decision History!</span>
+                  </span>
+                )}
 
                 <p className="w-full text-[10.5px] text-slate-400 mt-2">
                   {decision.disclaimer}
@@ -708,99 +805,27 @@ export default function DecisionLabPage() {
               <span>Back</span>
             </button>
 
-            {currentStep < 7 ? (
+            {currentStep < 6 ? (
               <button
-                onClick={() => setCurrentStep((s) => Math.min(7, s + 1))}
+                onClick={() => setCurrentStep((s) => Math.min(6, s + 1))}
                 className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#2B2A6E] text-white text-xs font-bold hover:bg-[#4F46E5] shadow-xs transition-all"
               >
                 <span>Continue to {STEPS[currentStep].name}</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <Link
-                href="/decision"
-                className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 shadow-xs transition-all"
+              <button
+                onClick={handleFinishAndSave}
+                disabled={savingDecision}
+                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 shadow-xs transition-all"
               >
-                <span>Finish & View All</span>
+                <span>{savingDecision ? "Saving..." : "Finish & Save to History"}</span>
                 <Check className="w-3.5 h-3.5" />
-              </Link>
+              </button>
             )}
-          </div>
-        </div>
-
-        {/* Right-Hand Decision Trace Audit Panel */}
-        <div className="lg:col-span-4 bg-white rounded-3xl border border-[#E8EAF3] p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-indigo-600" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-[#1E1B4B]">
-                Engine Trace (Audit Trail)
-              </h3>
-            </div>
-            <span className="text-[10px] font-mono text-emerald-600 font-bold">100% Deterministic</span>
-          </div>
-
-          <p className="text-[11px] text-slate-500">
-            Real compute timing and formula execution from the local engine. Click any stage to audit inputs and formulas.
-          </p>
-
-          <div className="space-y-2.5">
-            {traces.map((t: any, idx: number) => {
-              const isSelected = selectedTraceStage === t.stage;
-
-              return (
-                <div
-                  key={idx}
-                  onClick={() => setSelectedTraceStage(isSelected ? null : t.stage)}
-                  className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
-                    isSelected
-                      ? "border-indigo-400 bg-indigo-50/50 shadow-2xs"
-                      : "border-slate-200/80 bg-[#FAFBFC] hover:bg-slate-50"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#1E1B4B]">{t.stage}</span>
-                    <span className="font-mono text-[10px] text-slate-400">
-                      {t.executionTimeMs?.toFixed(2)}ms
-                    </span>
-                  </div>
-                  <p className="text-[10.5px] text-slate-500 truncate mt-0.5">
-                    {t.formula}
-                  </p>
-
-                  {isSelected && (
-                    <div className="mt-2.5 pt-2.5 border-t border-indigo-100 text-[11px] font-mono space-y-2 bg-white p-2.5 rounded-lg">
-                      <div>
-                        <span className="font-bold text-slate-400 block text-[9.5px] uppercase">
-                          Formula / Logic
-                        </span>
-                        <span className="text-indigo-900">{t.formula}</span>
-                      </div>
-                      <div>
-                        <span className="font-bold text-slate-400 block text-[9.5px] uppercase">
-                          Inputs
-                        </span>
-                        <pre className="text-[10px] text-slate-600 overflow-x-auto">
-                          {JSON.stringify(t.inputs, null, 2)}
-                        </pre>
-                      </div>
-                      <div>
-                        <span className="font-bold text-slate-400 block text-[9.5px] uppercase">
-                          Outputs
-                        </span>
-                        <pre className="text-[10px] text-slate-600 overflow-x-auto">
-                          {JSON.stringify(t.outputs, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
         </div>
       </div>
     </div>
   );
 }
-

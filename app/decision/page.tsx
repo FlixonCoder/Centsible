@@ -33,7 +33,7 @@ export default function DecisionHistoryPage() {
       .catch(() => setLoading(false));
   }, []);
 
-  const activeEvent = events.find((e) => e.status === "pending");
+  const activeEvent = events.find((e) => e.status === "active" || e.status === "pending");
 
   return (
     <div className="space-y-6">

@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
     } else if (lower.includes("cheap") || lower.includes("best") || lower.includes("option")) {
       const rec = optionsComp.recommendedOption;
       const worst = optionsComp.worstOption;
-      reply = `The most cost-effective route is the **${rec.title}** at an illustrative rate of **${rec.interestRateAnnual}% p.a.**. Over 12 months, you repay **${formatINR(
+      reply = `The most cost-effective route is the **${rec.title}** at an illustrative rate of **${rec.rate}% p.a.**. Over 12 months, you repay **${formatINR(
         rec.totalRepaid
       )}** (extra cost: ${formatINR(rec.extraCost)}). In contrast, revolving on credit card minimum dues takes ~${worst.tenureMonths} months and costs **${formatINR(
         worst.totalRepaid

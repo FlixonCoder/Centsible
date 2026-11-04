@@ -36,7 +36,11 @@ const titles: Record<string, { title: string; subtitle: string }> = {
   },
   "/decision/new": {
     title: "Decision Lab",
-    subtitle: "Evaluate affordability, stress test, and true costs before borrowing",
+    subtitle: "Evaluate affordability, true costs, and savings before borrowing",
+  },
+  "/stress-test": {
+    title: "Stress Testing Lab",
+    subtitle: "Test income drops, 1-month job gaps, and cash flow shock resilience",
   },
   "/savings": {
     title: "Savings Finder",

@@ -61,7 +61,7 @@ export async function GET() {
 
     // Active Emergency Event
     const activeEmergency = await db.expenseEvent.findFirst({
-      where: { userId, status: "pending" },
+      where: { userId, status: { in: ["active", "pending"] } },
       orderBy: { due: "asc" },
     });
 
